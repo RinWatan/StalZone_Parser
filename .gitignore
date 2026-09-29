@@ -8,7 +8,6 @@ __pycache__/
 *.exe
 *.log
 *.spec
-listing.json
 buy_now.html
 buy_now.txt
 flip_budget.txt
