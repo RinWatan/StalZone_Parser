@@ -1,0 +1,16 @@
+exbo.json
+exbo.json.bak
+dist/
+build/
+для_друзей/
+__pycache__/
+*.pyc
+*.exe
+*.log
+*.spec
+listing.json
+buy_now.html
+buy_now.txt
+flip_budget.txt
+STALZONE-friends/
+STALZONE-friends.zip
