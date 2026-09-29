@@ -48,12 +48,14 @@ copy /Y "dist\stalzone_agent.exe" "stalzone_agent.exe" >nul
 if not exist "для_друзей" mkdir "для_друзей"
 copy /Y "STALZONE.exe" "для_друзей\STALZONE.exe" >nul
 copy /Y "exbo.json" "для_друзей\exbo.json" >nul
+copy /Y "listing.json" "для_друзей\listing.json" >nul
+copy /Y "no-auction.json" "для_друзей\no-auction.json" >nul
 
 echo.
 echo Готово.
 echo   STALZONE.exe            окно у тебя
 echo   для_друзей\STALZONE.exe и для_друзей\exbo.json
-echo Друзьям кидай только папку для_друзей. Оба файла рядом, Python им не нужен.
+echo Друзьям кидай папку для_друзей целиком: exe, ключ и два json каталога.
 echo Если антивирус ругнётся, это обычная ложная тревога на PyInstaller.
 echo.
 pause
