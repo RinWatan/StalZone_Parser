@@ -8,6 +8,8 @@ __pycache__/
 *.exe
 *.log
 *.spec
+catalog.json
+not_on_auction.json
 buy_now.html
 buy_now.txt
 flip_budget.txt
