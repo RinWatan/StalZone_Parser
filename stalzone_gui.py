@@ -29,7 +29,9 @@ class App:
         self._style()
         self._build()
         self.log("Ждёт. Вкладка «Аукцион» — поиск по всему каталогу, лоты и история.")
-        self.root.after(150, self._pump)
+        from stalzone_overlay import Overlay
+        self.overlay = Overlay(self, agent.DIR / 'overlay_settings.json')
+        self._pump_id = self.root.after(150, self._pump)
 
     def _style(self):
         style = ttk.Style()
@@ -48,13 +50,17 @@ class App:
         style.map("Stop.TButton", background=[("active", "#8a3c3c"), ("disabled", "#2a2220")])
 
     def _build(self):
-        top = tk.Frame(self.root, bg="#14120f")
+        self.full_frame = tk.Frame(self.root, bg="#14120f")
+        self.full_frame.pack(fill='both', expand=True)
+        top = tk.Frame(self.full_frame, bg="#14120f")
         top.pack(fill="x", padx=16, pady=(14, 6))
         tk.Label(top, text="STALZONE", bg="#14120f", fg="#f0d7a2", font=("Segoe UI", 18, "bold")).pack(side="left")
+        ttk.Button(top, text='Свернуть в оверлей', style='Dark.TButton',
+                   command=lambda: self.overlay.collapse()).pack(side='right')
         self.state = tk.StringVar(value="ожидание")
         tk.Label(top, textvariable=self.state, bg="#14120f", fg="#9c9486", font=("Segoe UI", 11)).pack(side="left", padx=16)
 
-        bar = tk.Frame(self.root, bg="#14120f")
+        bar = tk.Frame(self.full_frame, bg="#14120f")
         bar.pack(fill="x", padx=16, pady=(0, 8))
         self.btn_run = ttk.Button(bar, text="Прогон", style="Gold.TButton", command=self.start_once)
         self.btn_run.pack(side="left")
@@ -92,7 +98,7 @@ class App:
         self.section_box = ttk.Combobox(bar, textvariable=self.section, values=list(self.section_map), width=18, state="readonly", font=("Segoe UI", 10))
         self.section_box.pack(side="left", padx=8)
 
-        book = ttk.Notebook(self.root)
+        book = ttk.Notebook(self.full_frame)
         book.pack(fill="both", expand=True, padx=16, pady=(0, 8))
         self.trees = {}
         specs = [
@@ -141,8 +147,8 @@ class App:
 
         self._build_lots(book)
 
-        tk.Label(self.root, text="Лог", bg="#14120f", fg="#9c9486", anchor="w", font=("Segoe UI", 10)).pack(fill="x", padx=16)
-        self.box = tk.Text(self.root, height=6, bg="#100e0c", fg="#e6e0d6", insertbackground="#e6e0d6", relief="flat", font=("Consolas", 10), wrap="word")
+        tk.Label(self.full_frame, text="Лог", bg="#14120f", fg="#9c9486", anchor="w", font=("Segoe UI", 10)).pack(fill="x", padx=16)
+        self.box = tk.Text(self.full_frame, height=6, bg="#100e0c", fg="#e6e0d6", insertbackground="#e6e0d6", relief="flat", font=("Consolas", 10), wrap="word")
         self.box.pack(fill="x", padx=16, pady=(0, 14))
         self.box.configure(state="disabled")
 
@@ -441,9 +447,10 @@ class App:
                     self._busy(payload)
         except queue.Empty:
             pass
-        self.root.after(150, self._pump)
+        self._pump_id = self.root.after(150, self._pump)
 
     def _busy(self, on):
+        self.overlay.set_busy(on)
         state = "disabled" if on else "normal"
         self.btn_run.configure(state=state)
         self.btn_auto.configure(state=state)
@@ -714,6 +721,7 @@ class App:
 
     def fill(self, data):
         if "buys" in data:
+            self.overlay.update_deals(data.get('buys') or [])
             seen = []
             for r in data.get("buys") or []:
                 slug = r.get("slug")
