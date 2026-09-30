@@ -19,3 +19,5 @@ STALZONE-friends.zip
 overlay_settings.json
 overlay_settings.tmp
 screen_slots.json
+pda_cache/
+map_dir.txt

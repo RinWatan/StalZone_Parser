@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 import stalzone_agent as agent
+import stalzone_pda as pda
 
 SECTIONS = [
     ("Общий", None),
@@ -291,12 +292,51 @@ class Bridge:
         except Exception:
             return []
 
-    def add_mark(self, slug, lat, lng, title):
-        names = {
-            "south-zone", "north-zone", "wild-north", "lyubech", "labyrinth", "graveyard",
+    def pda_status(self):
+        root = pda.map_root(agent.DIR)
+        maps = pda.list_maps(root)
+        if not maps:
+            return {"ok": False, "dir": str(root), "maps": [], "error": "Папка ПДА не найдена: " + str(root)}
+        return {
+            "ok": True,
+            "dir": str(root),
+            "maps": [{"slug": item["slug"], "title": item["title"], "count": item["count"]} for item in maps],
         }
+
+    def pda_map(self, slug):
+        root = pda.map_root(agent.DIR)
+        found = {item["slug"]: item for item in pda.list_maps(root)}
+        item = found.get(str(slug or ""))
+        if not item:
+            return {"error": "Нет такой карты в папке ПДА"}
+        try:
+            pack = pda.prepare(item["dir"], agent.DIR / "pda_cache" / item["slug"])
+        except Exception as error:
+            self.note("ПДА: " + str(error))
+            return {"error": str(error)}
+        pack.update({
+            "local": True,
+            "slug": item["slug"],
+            "title": item["title"],
+            "count": len(pack["tiles"]),
+            "mine": self._marks_of(item["slug"]),
+            "areas": [],
+            "groups": [],
+        })
+        self.note(f"Карта {item['title']}: {pack['count']} кусков с диска")
+        return pack
+
+    def _map_slugs(self):
+        names = {"south-zone", "north-zone", "wild-north", "lyubech", "labyrinth", "graveyard"}
+        try:
+            names.update(item["slug"] for item in pda.list_maps(pda.map_root(agent.DIR)))
+        except Exception:
+            pass
+        return names
+
+    def add_mark(self, slug, lat, lng, title):
         slug = str(slug or "").strip()
-        if slug not in names:
+        if slug not in self._map_slugs():
             return []
         try:
             lat = float(lat)
@@ -779,7 +819,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
 const $ = (id) => document.getElementById(id);
 
 function sortValue(text) {
@@ -915,22 +955,39 @@ function drawWiki(pack) {
     state.wiki.remove();
     state.wiki = null;
   }
-  const view = mapViewOf(pack.settings);
-  const wiki = L.map(box, {
-    minZoom: view.minZoom,
-    maxZoom: view.maxZoom,
-    zoom: view.zoom,
-    center: view.center,
-    maxBounds: view.bounds,
-    maxBoundsViscosity: 1,
-    attributionControl: false
-  });
-  L.tileLayer(pack.settings.tiles + "/{z}-{x}-{y}.jpg", {
-    minZoom: view.minZoom,
-    maxZoom: view.maxZoom,
-    noWrap: true,
-    bounds: view.bounds
-  }).addTo(wiki);
+  let wiki;
+  if (pack.local) {
+    wiki = L.map(box, {crs: L.CRS.Simple, attributionControl: false, minZoom: -3, maxZoom: 3});
+    const size = pack.tile;
+    let south = Infinity, north = -Infinity, west = Infinity, east = -Infinity;
+    pack.tiles.forEach(tile => {
+      const bottom = tile.y * size;
+      const left = tile.x * size;
+      L.imageOverlay(pack.base + tile.file, [[bottom, left], [bottom + size, left + size]]).addTo(wiki);
+      south = Math.min(south, bottom);
+      north = Math.max(north, bottom + size);
+      west = Math.min(west, left);
+      east = Math.max(east, left + size);
+    });
+    if (pack.tiles.length) wiki.fitBounds([[south, west], [north, east]]);
+  } else {
+    const view = mapViewOf(pack.settings);
+    wiki = L.map(box, {
+      minZoom: view.minZoom,
+      maxZoom: view.maxZoom,
+      zoom: view.zoom,
+      center: view.center,
+      maxBounds: view.bounds,
+      maxBoundsViscosity: 1,
+      attributionControl: false
+    });
+    L.tileLayer(pack.settings.tiles + "/{z}-{x}-{y}.jpg", {
+      minZoom: view.minZoom,
+      maxZoom: view.maxZoom,
+      noWrap: true,
+      bounds: view.bounds
+    }).addTo(wiki);
+  }
   state.wiki = wiki;
   state.pack = pack;
   state.mine = pack.mine || [];
@@ -1062,6 +1119,30 @@ function paintMarks() {
   state.marks = layer;
 }
 
+async function openPda(slug) {
+  const request = state.mapRequest = (state.mapRequest || 0) + 1;
+  state.mapSlug = slug;
+  state.mapOpened = true;
+  state.placing = false;
+  $("wikimap").style.pointerEvents = "none";
+  $("maplayers").style.pointerEvents = "none";
+  $("mapstatus").textContent = "Собираю карту из клиента…";
+  document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === slug));
+  try {
+    const pack = await pywebview.api.pda_map(slug);
+    if (request !== state.mapRequest) return;
+    if (!pack || pack.error) throw new Error(pack?.error || "Пустой ответ карты");
+    drawWiki(pack);
+    $("wikimap").style.pointerEvents = "";
+    $("maplayers").style.pointerEvents = "";
+    $("mapstatus").textContent = pack.title + " · " + pack.count + " кусков, с диска";
+  } catch (error) {
+    if (request !== state.mapRequest) return;
+    state.mapOpened = false;
+    $("mapstatus").textContent = "Локальная карта не собралась: " + error.message;
+  }
+}
+
 async function openWiki(slug) {
   const request = state.mapRequest = (state.mapRequest || 0) + 1;
   state.mapSlug = slug;
@@ -1091,9 +1172,25 @@ function show(key) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
   if (key === "map") {
-    if (!state.mapOpened) {
-      state.mapOpened = true;
-      openWiki(state.mapSlug || "south-zone");
+    if (!state.mapBooted) {
+      state.mapBooted = true;
+      pywebview.api.pda_status().then(info => {
+        if (info && info.ok && info.maps.length) {
+          state.local = true;
+          const bar = $("mapbar");
+          bar.innerHTML = "";
+          info.maps.forEach(item => {
+            const btn = document.createElement("button");
+            btn.textContent = item.title;
+            btn.dataset.slug = item.slug;
+            btn.onclick = () => openPda(item.slug);
+            bar.appendChild(btn);
+          });
+          openPda(info.maps[0].slug);
+          return;
+        }
+        openWiki(state.mapSlug || "south-zone");
+      }).catch(() => openWiki(state.mapSlug || "south-zone"));
     } else if (state.wiki) {
       setTimeout(() => state.wiki.invalidateSize(), 60);
     }
