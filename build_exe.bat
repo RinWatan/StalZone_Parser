@@ -26,8 +26,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo --- Окно ---
-python -m PyInstaller --noconfirm --onefile --windowed --name STALZONE --hidden-import stalzone_agent --hidden-import httpx --hidden-import httpcore --collect-all webview --distpath dist --workpath build stalzone_gui.py
+echo --- Оверлей ---
+python -m PyInstaller --noconfirm --onefile --windowed --name STALZONE --hidden-import stalzone_agent --hidden-import stalzone_overlay --hidden-import stalzone_game_search --hidden-import game_window --hidden-import httpx --hidden-import httpcore --collect-all webview --distpath dist --workpath build stalzone_gui.py
 if errorlevel 1 (
   echo Сборка окна сломалась
   pause
@@ -47,13 +47,14 @@ copy /Y "dist\STALZONE.exe" "STALZONE.exe" >nul
 copy /Y "dist\stalzone_agent.exe" "stalzone_agent.exe" >nul
 if not exist "для_друзей" mkdir "для_друзей"
 copy /Y "STALZONE.exe" "для_друзей\STALZONE.exe" >nul
-copy /Y "exbo.json" "для_друзей\exbo.json" >nul
+if exist "exbo.json" copy /Y "exbo.json" "для_друзей\exbo.json" >nul
 
 echo.
 echo Готово.
-echo   STALZONE.exe            окно у тебя
+echo   STALZONE.exe            оверлей у тебя
 echo   для_друзей\STALZONE.exe и для_друзей\exbo.json
 echo Друзьям кидай папку для_друзей: exe и ключ. Базу предметов программа скачает сама.
+echo build_overlay.bat делает то же самое.
 echo Если антивирус ругнётся, это обычная ложная тревога на PyInstaller.
 echo.
 pause
