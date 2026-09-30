@@ -153,6 +153,39 @@ class Bridge:
         self.recent = self._read_json("auction_recent.json")
         self.lot_data = None
         self.open_slug = None
+        self.map_window = None
+
+    def open_map(self, slug):
+        slug = str(slug or "").strip()
+        names = {
+            "": "Все карты",
+            "south-zone": "Южная Зона",
+            "north-zone": "Северная Зона",
+            "wild-north": "Дикий Север",
+            "lyubech": "Любеч-3",
+            "labyrinth": "Лабиринт",
+            "graveyard": "Могильник",
+        }
+        if slug not in names:
+            return
+        url = "https://stalzone.wiki/maps" + (("/" + slug) if slug else "")
+        try:
+            import webview
+            window = self.map_window
+            if window is not None:
+                try:
+                    window.load_url(url)
+                    window.show()
+                    self.note("Карта: " + names[slug])
+                    return
+                except Exception:
+                    self.map_window = None
+            self.map_window = webview.create_window(
+                "Карта", url, width=1280, height=820, background_color="#0e0c0a"
+            )
+            self.note("Карта: " + names[slug])
+        except Exception as error:
+            self.note("Карта не открылась: " + str(error))
 
     def _read_json(self, name):
         path = agent.DIR / name
@@ -512,7 +545,7 @@ PAGE = r"""<!DOCTYPE html>
   .sub button.on { color: var(--gold); }
   .mapwrap { display: flex; flex-direction: column; height: 100%; }
   #mapbar button.on { background: var(--gold); color: #1a140c; }
-  #mapframe { flex: 1; width: 100%; border: 0; background: #0e0c0a; }
+  .mapnote { color: var(--dim); padding: 18px; max-width: 640px; }
 </style>
 </head>
 <body>
@@ -538,7 +571,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now"};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapSlug:""};
 const $ = (id) => document.getElementById(id);
 
 function sortValue(text) {
@@ -635,7 +668,7 @@ function build() {
   const mapView = document.createElement("div");
   mapView.className = "view";
   mapView.id = "v-map";
-  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><iframe id="mapframe" title="Карта"></iframe></div>`;
+  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div class="mapnote">Сайт карты внутри вкладки падает, поэтому она открывается своим окном. Кнопки сверху меняют локацию.</div></div>`;
   main.appendChild(mapView);
   const maps = [
     ["", "Все карты"],
@@ -656,19 +689,19 @@ function build() {
 }
 
 function openMap(slug) {
-  const frame = $("mapframe");
-  if (frame.dataset.slug !== slug) {
-    frame.dataset.slug = slug;
-    frame.src = slug ? "https://stalzone.wiki/maps/" + slug : "https://stalzone.wiki/maps";
-  }
+  state.mapSlug = slug;
   document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === slug));
+  if (window.pywebview) pywebview.api.open_map(slug);
 }
 
 function show(key) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
-  if (key === "map" && !$("mapframe").getAttribute("src")) openMap("");
+  if (key === "map" && !state.mapOpened) {
+    state.mapOpened = true;
+    openMap(state.mapSlug || "");
+  }
 }
 
 function esc(s) {
