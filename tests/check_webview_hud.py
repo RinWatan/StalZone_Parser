@@ -3,6 +3,7 @@ import sys
 import tempfile
 import time
 import traceback
+from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import webview
@@ -21,7 +22,12 @@ window = webview.create_window('STALZONE integration check', html=gui.PAGE, js_a
     hidden=True, on_top=True, background_color='#12100e')
 hud = HudController(window, agent.DIR / 'settings.json')
 bridge._hud = hud
-window.events.loaded += hud.start
+def start_hud():
+    # DOM tests do not reserve the hotkey used by the user's running overlay.
+    with patch('stalzone_overlay.GlobalHotkey') as hotkey:
+        hotkey.return_value.registered = True
+        hud.start()
+window.events.loaded += start_hud
 window.events.closing += hud.closing
 window.events.closed += hud.stop
 report = {}
@@ -70,6 +76,12 @@ def check():
         wait_js("document.body.classList.contains('full')")
         report['preserved'] = window.evaluate_js("({identity:state.wiki===window.savedMap,zoom:state.wiki.getZoom(),saved:window.savedZoom,tab:document.getElementById('v-map').classList.contains('on'),mode:document.body.className})")
         assert report['preserved']['identity'] and report['preserved']['tab'] and report['preserved']['zoom'] == report['preserved']['saved']
+        hud.command('passive')
+        wait_js("!document.body.classList.contains('full')")
+        hud.command('toggle')
+        wait_js("document.body.classList.contains('full')")
+        report['mode_restored'] = window.evaluate_js("state.wiki === window.savedMap && state.wiki.getZoom() === window.savedZoom && document.getElementById('v-map').classList.contains('on')")
+        assert report['mode_restored']
         window.evaluate_js('''window.mapRace = null; (async () => {
           const original = pywebview.api.wiki_map;
           const pack = state.pack;

@@ -54,6 +54,21 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(self.hud.snapshot()['mode'], 'compact')
         self.assertEqual(self.native.fg, 123)
         self.assertFalse(self.native.interactive)
+        self.action('toggle')
+        self.assertEqual(self.hud.snapshot()['mode'], 'full')
+    def test_explicit_collapse_changes_remembered_mode(self):
+        self.action('full')
+        self.action('compact')
+        self.action('passive')
+        self.action('toggle')
+        self.assertEqual(self.hud.snapshot()['mode'], 'compact')
+    def test_alt_tab_does_not_forget_full_mode(self):
+        self.action('full')
+        self.native.fg = 789
+        self.hud.tick()
+        self.native.fg = 123
+        self.action('toggle')
+        self.assertEqual(self.hud.snapshot()['mode'], 'full')
     def test_last_queued_command_keeps_focus_in_game(self):
         self.action('toggle')
         self.hud.command('full')

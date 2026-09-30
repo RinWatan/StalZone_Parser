@@ -89,6 +89,7 @@ class HudController:
         self.settings = load_settings(settings_path)
         self.native = native
         self.mode = 'compact'
+        self.resume_mode = 'compact'
         self.interactive = False
         self.game = None
         self.bounds = None
@@ -199,13 +200,14 @@ class HudController:
                 self.window.destroy()
                 return
             if action == 'toggle':
-                action = 'passive' if self.interactive else self.mode
+                action = 'passive' if self.interactive else self.resume_mode
             if action == 'passive':
                 activate = False
                 self._change('compact', False)
                 if self.native.owns(self.native.foreground()):
                     self.native.return_to(self.game)
             else:
+                self.resume_mode = action
                 self._change(action, True)
                 activate = True
         fg = self.native.foreground()
