@@ -9,6 +9,28 @@ from stalzone_gui import App
 from stalzone_overlay import fit_geometry, load_settings
 
 
+class FakeGameWindow:
+    def __init__(self, root):
+        self.root = root
+        self.game = 123
+        self.foreground_hwnd = 123
+        self.rect = (0, 0, 1920, 1080)
+        self.interactive = False
+        self.visible = False
+
+    def find_game(self): return self.game
+    def client_bounds(self, hwnd): return self.rect if hwnd else None
+    def foreground(self): return self.foreground_hwnd
+    def owns(self, hwnd): return hwnd == 456
+    def set_interactive(self, value): self.interactive = value
+    def show(self, visible):
+        self.visible = visible
+        self.root.deiconify() if visible else self.root.withdraw()
+    def place(self, x, y, w, h): self.root.geometry(f'{w}x{h}+{x}+{y}')
+    def activate(self): self.foreground_hwnd = 456
+    def return_to(self, hwnd): self.foreground_hwnd = hwnd
+
+
 class SettingsTests(unittest.TestCase):
     def test_bad_settings_fall_back(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -37,12 +59,15 @@ class OverlayTests(unittest.TestCase):
         self.catalog_patch.start()
         self.hotkey_patch = patch('stalzone_overlay.GlobalHotkey')
         self.hotkey_patch.start()
+        self.native_patch = patch('stalzone_overlay.GameWindow', FakeGameWindow)
+        self.native_patch.start()
         self.app = App()
         self.app.root.update()
 
     def tearDown(self):
         self.app.overlay.close()
         self.hotkey_patch.stop()
+        self.native_patch.stop()
         self.catalog_patch.stop()
         self.dir_patch.stop()
         self.temp.cleanup()
@@ -111,12 +136,59 @@ class OverlayTests(unittest.TestCase):
     def test_collapse_from_maximized_restores_compact_size(self):
         self.app.overlay.expand()
         self.app.root.update()
+        # Simulate legacy/decorated maximization before restoring HUD mode.
+        self.app.root.overrideredirect(False)
         self.app.root.state('zoomed')
         self.app.root.update()
         self.app.overlay.collapse()
         self.app.root.update()
         self.assertEqual(self.app.root.state(), 'normal')
         self.assertLess(self.app.root.winfo_width(), 700)
+
+    def test_hud_is_borderless_and_passive(self):
+        self.assertTrue(self.app.root.overrideredirect())
+        self.assertFalse(self.app.overlay.interactive)
+        self.assertFalse(self.app.overlay.native.interactive)
+
+    def test_other_application_hides_panel_and_game_restores_it(self):
+        hud = self.app.overlay
+        hud.native.foreground_hwnd = 999
+        hud.sync_game()
+        self.assertFalse(hud.native.visible)
+        hud.native.foreground_hwnd = 123
+        hud.sync_game()
+        self.assertTrue(hud.native.visible)
+
+    def test_hotkey_enters_edit_and_returns_game_focus(self):
+        hud = self.app.overlay
+        hud.toggle_interaction()
+        self.assertTrue(hud.interactive)
+        self.assertTrue(hud.native.interactive)
+        self.assertEqual(hud.native.foreground(), 456)
+        hud.expand()
+        hud.toggle_interaction()
+        self.assertFalse(hud.interactive)
+        self.assertEqual(hud.mode, 'compact')
+        self.assertEqual(hud.native.foreground(), 123)
+
+    def test_panel_moves_with_game(self):
+        hud = self.app.overlay
+        self.app.root.update()
+        before = self.app.root.winfo_x()
+        hud.native.rect = (100, 0, 1920, 1080)
+        hud.sync_game()
+        self.app.root.update()
+        self.assertEqual(self.app.root.winfo_x(), before + 100)
+
+    def test_missing_game_can_open_setup_via_hotkey(self):
+        hud = self.app.overlay
+        hud.native.game = None
+        hud.native.foreground_hwnd = 999
+        hud.sync_game()
+        self.assertFalse(hud.native.visible)
+        hud.toggle_interaction()
+        self.assertTrue(hud.native.visible)
+        self.assertTrue(hud.interactive)
 
 
 if __name__ == '__main__':

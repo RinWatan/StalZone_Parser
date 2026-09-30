@@ -19,6 +19,7 @@ def money(n):
 class App:
     def __init__(self):
         self.root = tk.Tk()
+        self.root.withdraw()
         self.root.title("STALZONE")
         self.root.geometry("1180x760")
         self.root.minsize(960, 600)
@@ -53,6 +54,7 @@ class App:
         self.full_frame = tk.Frame(self.root, bg="#14120f")
         self.full_frame.pack(fill='both', expand=True)
         top = tk.Frame(self.full_frame, bg="#14120f")
+        self.full_header = top
         top.pack(fill="x", padx=16, pady=(14, 6))
         tk.Label(top, text="STALZONE", bg="#14120f", fg="#f0d7a2", font=("Segoe UI", 18, "bold")).pack(side="left")
         ttk.Button(top, text='Свернуть в оверлей', style='Dark.TButton',
