@@ -18,7 +18,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-python -m pip install --upgrade pip pyinstaller
+python -m pip install --upgrade pip pyinstaller httpx pywebview
 if errorlevel 1 (
   echo Не удалось поставить PyInstaller
   pause
@@ -27,7 +27,7 @@ if errorlevel 1 (
 
 echo.
 echo --- Окно ---
-python -m PyInstaller --noconfirm --onefile --windowed --name STALZONE --hidden-import stalzone_agent --distpath dist --workpath build stalzone_gui.py
+python -m PyInstaller --noconfirm --onefile --windowed --name STALZONE --hidden-import stalzone_agent --hidden-import httpx --hidden-import httpcore --collect-all webview --distpath dist --workpath build stalzone_gui.py
 if errorlevel 1 (
   echo Сборка окна сломалась
   pause
@@ -36,7 +36,7 @@ if errorlevel 1 (
 
 echo.
 echo --- Агент без окна, для командной строки ---
-python -m PyInstaller --noconfirm --onefile --console --name stalzone_agent --distpath dist --workpath build stalzone_agent.py
+python -m PyInstaller --noconfirm --onefile --console --name stalzone_agent --hidden-import httpx --hidden-import httpcore --distpath dist --workpath build stalzone_agent.py
 if errorlevel 1 (
   echo Сборка агента сломалась
   pause

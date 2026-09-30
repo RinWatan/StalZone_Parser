@@ -1,220 +1,158 @@
 # -*- coding: utf-8 -*-
-"""Окно агента: разделы цен, прогон, автопрогон, стоп и лог."""
+"""Окно агента. Расчёты те же, интерфейс на системном браузере Windows."""
 import json
-import queue
-import re
+import sys
 import threading
 import time
-import tkinter as tk
-from tkinter import ttk
-import sys
+import traceback
+from pathlib import Path
 
 import stalzone_agent as agent
+
+SECTIONS = [
+    ("Общий", None),
+    ("Выкуп", "buys"),
+    ("Фарм", "farm"),
+    ("Арсенал", "arsenal"),
+    ("Убежище купить", "shelter_buy"),
+    ("Убежище продать", "shelter_sell"),
+    ("Расходники", "consumables"),
+    ("Арты", "arts"),
+    ("Протоартефакты", "protos"),
+]
+TABLES = {
+    "buys": ["Предмет", "Редкость", "Точка", "Лоты", "Цена лота", "За штуку", "Продашь", "Сумма пачки", "Прибыль", "В час", "Решение"],
+    "farm": ["Предмет", "Продают", "Продавать от", "Пачка", "Решение"],
+    "arsenal": ["Предмет", "Продают", "Продавать от", "Решение"],
+    "shelter_buy": ["Предмет", "Продают", "Выкуп", "Решение"],
+    "shelter_sell": ["Предмет", "Продают", "Продавать от", "Решение"],
+    "consumables": ["Предмет", "Продают", "Выкуп", "Фарм"],
+    "arts": ["Арт", "Редкость", "Точка", "Сделок", "Покупали", "Продавали", "Профит", "Решение"],
+    "protos": ["Редкость", "Сделок", "Выкуп", "Фарм", "Цена", "Продают", "Профит"],
+}
 
 
 def money(n):
     return agent.rub(n)
 
 
-class App:
+def _tag(act):
+    text = act or ""
+    if "ВЫКУП" in text and "НЕ" not in text:
+        return "buy"
+    if text.startswith("СЛИТ"):
+        return "sell"
+    if text.startswith("ДЕРЖ"):
+        return "hold"
+    return "skip"
+
+
+def _side(rows):
+    out = []
+    for r in rows:
+        if r.get("err"):
+            out.append({"cells": [r["name"], "—", r["err"], "—"], "tag": "skip"})
+            continue
+        why = r.get("why") or ""
+        buy = r.get("buy") or ""
+        note = f"{buy} · {why}" if why else buy
+        out.append({"cells": [r["name"], money(r.get("med", 0)), note, r.get("farm") or ""], "tag": _tag(buy)})
+    return out
+
+
+def _sell(rows, pack=False):
+    out = []
+    for r in rows:
+        if r.get("err"):
+            cells = [r["name"], "—", r["err"], "—", "—"] if pack else [r["name"], "—", r["err"], "—"]
+            out.append({"cells": cells, "tag": "skip"})
+            continue
+        price = money(r.get("ask", r.get("med", 0)))
+        note = r.get("farm") or ""
+        if r.get("why"):
+            note = f"{note}: {r['why']}"
+        if pack:
+            cells = [r["name"], money(r.get("med", 0)), price, r.get("pack") or "—", note]
+        else:
+            cells = [r["name"], money(r.get("med", 0)), price, note]
+        out.append({"cells": cells, "tag": _tag(r.get("farm"))})
+    return out
+
+
+def rows_from(data):
+    tables = {}
+    if "buys" in data:
+        buys = []
+        for r in data.get("buys") or []:
+            tag = f"q{r['qlt_i']}" if r.get("qlt_i") is not None else "buy"
+            buys.append({
+                "cells": [
+                    r["name"], r.get("qlt") or "—", r.get("ptn") or "—",
+                    f"{r['copies']} x {r['amount']}", money(r["buyout"]), f"{r['unit']:.0f}",
+                    f"{r['med']:.0f}", money(r["med"] * r["amount"]), money(r["gain"]),
+                    f"{r.get('per_h', 0):.1f}", "ВЫКУПИТЬ",
+                ],
+                "tag": tag,
+            })
+        tables["buys"] = buys
+    if "farm" in data:
+        tables["farm"] = _sell(data.get("farm") or [], pack=True)
+    if "arsenal" in data:
+        tables["arsenal"] = _sell(data.get("arsenal") or [])
+    if "shelter_buy" in data:
+        mats = []
+        for r in data.get("shelter_buy") or []:
+            if r.get("err"):
+                mats.append({"cells": [r["name"], "—", r["err"], "—"], "tag": "skip"})
+            else:
+                mats.append({"cells": [r["name"], money(r.get("med", 0)), r.get("why") or "", r.get("buy") or ""], "tag": _tag(r.get("buy"))})
+        tables["shelter_buy"] = mats
+    if "shelter_sell" in data:
+        tables["shelter_sell"] = _sell(data.get("shelter_sell") or [])
+    if "consumables" in data:
+        tables["consumables"] = _side(data.get("consumables") or [])
+    if "arts" in data:
+        arts = []
+        for r in data.get("arts") or []:
+            if r.get("err"):
+                arts.append({"cells": [r["name"], "—", "—", "—", "—", "—", "—", r["err"]], "tag": "skip"})
+            else:
+                tag = f"q{r['qlt_i']}" if r.get("qlt_i") is not None else "skip"
+                arts.append({
+                    "cells": [r["name"], r.get("qlt") or "—", r.get("ptn") or "—", r["n"], money(r["cheap"]), money(r["med"]), money(r["net"]), r.get("liq") or "БРАТЬ"],
+                    "tag": tag,
+                })
+        tables["arts"] = arts
+    if "protos" in data:
+        protos = []
+        for r in data.get("protos") or []:
+            if r.get("err"):
+                protos.append({"cells": [r.get("qlt") or r["name"], "—", r["err"], "—", "—", "—", "—"], "tag": "skip"})
+            else:
+                decision = r.get("buy") or ""
+                protos.append({
+                    "cells": [r.get("qlt", ""), r.get("n", ""), decision, r.get("farm", ""), money(r.get("cheap", 0)), money(r.get("med", 0)), money(r.get("net", 0))],
+                    "tag": _tag(decision if decision == "ВЫКУПИТЬ" else r.get("farm")),
+                })
+        tables["protos"] = protos
+    return tables
+
+
+class Bridge:
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("STALZONE")
-        self.root.geometry("1180x760")
-        self.root.minsize(960, 600)
-        self.root.configure(bg="#14120f")
+        self.lock = threading.Lock()
+        self.logs = ["Ждёт. Вкладка «Аукцион» — поиск по каталогу, лоты и история."]
+        self.status = "ожидание"
+        self.busy = False
+        self.tables = {}
+        self.rev = 0
         self.worker = None
-        self.ui = queue.Queue()
-        self._watch = []
-        self._style()
-        self._build()
-        self.log("Ждёт. Вкладка «Аукцион» — поиск по всему каталогу, лоты и история.")
-        self.root.after(150, self._pump)
-
-    def _style(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TNotebook", background="#14120f", borderwidth=0)
-        style.configure("TNotebook.Tab", background="#221e18", foreground="#d9d3c7", padding=[16, 8], borderwidth=0)
-        style.map("TNotebook.Tab", background=[("selected", "#3a3122")], foreground=[("selected", "#f0d7a2")])
-        style.configure("Treeview", background="#1b1814", fieldbackground="#1b1814", foreground="#efeae2", rowheight=28, borderwidth=0, font=("Segoe UI", 10))
-        style.configure("Treeview.Heading", background="#2a251c", foreground="#cbbfa8", relief="flat", font=("Segoe UI", 10, "bold"))
-        style.map("Treeview", background=[("selected", "#4a3b24")])
-        style.configure("Gold.TButton", background="#e0b15a", foreground="#1a140c", padding=[14, 8], font=("Segoe UI", 10, "bold"), borderwidth=0)
-        style.map("Gold.TButton", background=[("active", "#f0d7a2"), ("disabled", "#6a5a3a")])
-        style.configure("Dark.TButton", background="#2a251c", foreground="#f0d7a2", padding=[14, 8], font=("Segoe UI", 10), borderwidth=0)
-        style.map("Dark.TButton", background=[("active", "#3a3122"), ("disabled", "#221e18")])
-        style.configure("Stop.TButton", background="#6b3030", foreground="#f6d0c8", padding=[14, 8], font=("Segoe UI", 10), borderwidth=0)
-        style.map("Stop.TButton", background=[("active", "#8a3c3c"), ("disabled", "#2a2220")])
-
-    def _build(self):
-        top = tk.Frame(self.root, bg="#14120f")
-        top.pack(fill="x", padx=16, pady=(14, 6))
-        tk.Label(top, text="STALZONE", bg="#14120f", fg="#f0d7a2", font=("Segoe UI", 18, "bold")).pack(side="left")
-        self.state = tk.StringVar(value="ожидание")
-        tk.Label(top, textvariable=self.state, bg="#14120f", fg="#9c9486", font=("Segoe UI", 11)).pack(side="left", padx=16)
-
-        bar = tk.Frame(self.root, bg="#14120f")
-        bar.pack(fill="x", padx=16, pady=(0, 8))
-        self.btn_run = ttk.Button(bar, text="Прогон", style="Gold.TButton", command=self.start_once)
-        self.btn_run.pack(side="left")
-        self.btn_auto = ttk.Button(bar, text="Автопрогон", style="Dark.TButton", command=self.start_auto)
-        self.btn_auto.pack(side="left", padx=8)
-        self.btn_live = ttk.Button(bar, text="Онлайн", style="Dark.TButton", command=self.start_live)
-        self.btn_live.pack(side="left")
-        tk.Label(bar, text="каждые", bg="#14120f", fg="#9c9486", font=("Segoe UI", 10)).pack(side="left")
-        self.minutes = ttk.Spinbox(bar, from_=1, to=180, width=5, font=("Segoe UI", 11), justify="center")
-        self.minutes.set("30")
-        self.minutes.pack(side="left", padx=6)
-        tk.Label(bar, text="мин", bg="#14120f", fg="#9c9486", font=("Segoe UI", 10)).pack(side="left")
-        tk.Label(bar, text="бюджет", bg="#14120f", fg="#9c9486", font=("Segoe UI", 10)).pack(side="left", padx=(12, 4))
-        saved = "5000000"
-        budget_path = agent.DIR / "flip_budget.txt"
-        if budget_path.exists():
-            saved = budget_path.read_text(encoding="utf-8").strip() or saved
-        self.budget = tk.StringVar(value=saved)
-        self.budget_box = tk.Entry(bar, textvariable=self.budget, width=12, bg="#100e0c", fg="#efeae2", insertbackground="#efeae2", relief="flat", font=("Segoe UI", 11), justify="center")
-        self.budget_box.pack(side="left", ipady=4)
-        self.btn_stop = ttk.Button(bar, text="Стоп", style="Stop.TButton", command=self.stop, state="disabled")
-        self.btn_stop.pack(side="left", padx=12)
-        self.section_map = {
-            "Общий": None,
-            "Выкуп": "buys",
-            "Фарм": "farm",
-            "Арсенал": "arsenal",
-            "Убежище купить": "shelter_buy",
-            "Убежище продать": "shelter_sell",
-            "Расходники": "consumables",
-            "Арты": "arts",
-            "Протоартефакты": "protos",
-        }
-        self.section = tk.StringVar(value="Общий")
-        self.section_box = ttk.Combobox(bar, textvariable=self.section, values=list(self.section_map), width=18, state="readonly", font=("Segoe UI", 10))
-        self.section_box.pack(side="left", padx=8)
-
-        book = ttk.Notebook(self.root)
-        book.pack(fill="both", expand=True, padx=16, pady=(0, 8))
-        self.trees = {}
-        specs = [
-            ("Выкуп", ("Предмет", "Редкость", "Точка", "Лоты", "Цена лота", "За штуку", "Продашь", "Сумма пачки", "Прибыль", "В час", "Решение")),
-            ("Фарм", ("Предмет", "Продают", "Продавать от", "Пачка", "Решение")),
-            ("Арсенал", ("Предмет", "Продают", "Продавать от", "Решение")),
-            ("Убежище купить", ("Предмет", "Продают", "Выкуп", "Решение")),
-            ("Убежище продать", ("Предмет", "Продают", "Продавать от", "Решение")),
-            ("Расходники", ("Предмет", "Продают", "Выкуп", "Фарм")),
-            ("Арты", ("Арт", "Редкость", "Точка", "Сделок", "Покупали", "Продавали", "Профит", "Решение")),
-            ("Протоартефакты", ("Редкость", "Сделок", "Выкуп", "Фарм", "Цена", "Продают", "Профит")),
-        ]
-        for title, cols in specs:
-            frame = tk.Frame(book, bg="#1b1814")
-            book.add(frame, text=title)
-            tree = ttk.Treeview(frame, columns=cols, show="headings")
-            tree._order = {}
-            for col in cols:
-                tree.heading(col, text=col, command=lambda c=col, t=tree: self._sort_col(t, c))
-                width = 260 if col in ("Предмет", "Арт", "Выкуп", "Решение", "Редкость", "Пачка", "Сумма пачки", "Продавать от") else 90
-                tree.column(col, width=width, anchor="w")
-            scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-            tree.configure(yscrollcommand=scroll.set)
-            tree.pack(side="left", fill="both", expand=True)
-            scroll.pack(side="right", fill="y")
-            menu = tk.Menu(tree, tearoff=0, bg="#2a251c", fg="#efeae2")
-            menu.add_command(label="Копировать название", command=lambda t=tree: self._copy_name(t))
-            tree.bind("<Button-3>", lambda e, t=tree, m=menu: self._popup(e, t, m))
-            tree.bind("<Control-c>", lambda e, t=tree: self._copy_name(t))
-            tree.bind("<Control-C>", lambda e, t=tree: self._copy_name(t))
-            tree.bind("<Double-1>", lambda e, t=tree: self._copy_name(t))
-            tree.tag_configure("buy", foreground="#9dccff")
-            tree.tag_configure("sell", foreground="#9ddeaf")
-            tree.tag_configure("hold", foreground="#e0b15a")
-            tree.tag_configure("skip", foreground="#8d877c")
-            for qi, color in (
-                (0, "#c8c2b8"),
-                (1, "#7dcea0"),
-                (2, "#5dade2"),
-                (3, "#c39bd3"),
-                (4, "#e07a7a"),
-                (5, "#f0d78c"),
-            ):
-                tree.tag_configure(f"q{qi}", foreground=color)
-            self.trees[title] = tree
-
-        self._build_lots(book)
-
-        tk.Label(self.root, text="Лог", bg="#14120f", fg="#9c9486", anchor="w", font=("Segoe UI", 10)).pack(fill="x", padx=16)
-        self.box = tk.Text(self.root, height=6, bg="#100e0c", fg="#e6e0d6", insertbackground="#e6e0d6", relief="flat", font=("Consolas", 10), wrap="word")
-        self.box.pack(fill="x", padx=16, pady=(0, 14))
-        self.box.configure(state="disabled")
-
-    def _build_lots(self, book):
-        frame = tk.Frame(book, bg="#1b1814")
-        book.add(frame, text="Аукцион")
-        bar = tk.Frame(frame, bg="#1b1814")
-        bar.pack(fill="x", padx=8, pady=(8, 4))
-        self.auc_query = tk.StringVar()
-        search = tk.Entry(bar, textvariable=self.auc_query, width=28, bg="#100e0c", fg="#efeae2", insertbackground="#efeae2", relief="flat", font=("Segoe UI", 11))
-        search.pack(side="left", ipady=4)
-        search.bind("<KeyRelease>", lambda e: self._render_auction())
-        self.auc_cat = tk.StringVar(value="Все предметы")
-        self.auc_cat_box = ttk.Combobox(bar, textvariable=self.auc_cat, values=[title for _key, title in agent.AUCTION_CATS], width=16, state="readonly", font=("Segoe UI", 10))
-        self.auc_cat_box.pack(side="left", padx=8)
-        self.auc_cat_box.bind("<<ComboboxSelected>>", lambda e: self._render_auction())
-        self.auc_sort = tk.StringVar(value="По имени")
-        sort = ttk.Combobox(bar, textvariable=self.auc_sort, values=["По имени", "По рангу"], width=12, state="readonly", font=("Segoe UI", 10))
-        sort.pack(side="left")
-        sort.bind("<<ComboboxSelected>>", lambda e: self._render_auction())
-        ttk.Button(bar, text="В избранное", style="Dark.TButton", command=self._toggle_fav).pack(side="left", padx=8)
-        self._auction = []
-        self._fav = set(self._read_json("auction_fav.json"))
-        self._recent = self._read_json("auction_recent.json")
-        self._lot_data = None
-        self._lot_name = ""
-        self._open_slug = None
-        pane = tk.PanedWindow(frame, orient="horizontal", bg="#14120f", sashwidth=6, sashrelief="flat")
-        pane.pack(fill="both", expand=True, padx=8, pady=4)
-        left = tk.Frame(pane, bg="#1b1814")
-        right = tk.Frame(pane, bg="#1b1814")
-        pane.add(left, minsize=300)
-        pane.add(right, minsize=520)
-        self.item_tree = ttk.Treeview(left, columns=("Предмет", "Раздел", "Ранг"), show="headings")
-        self.item_tree._order = {}
-        for col, width in (("Предмет", 220), ("Раздел", 110), ("Ранг", 90)):
-            self.item_tree.heading(col, text=col)
-            self.item_tree.column(col, width=width, anchor="w")
-        for rank, color in (
-            ("RANK_LEGEND", "#e0b15a"), ("RANK_MASTER", "#e07a7a"), ("RANK_VETERAN", "#c4a3ff"),
-            ("RANK_STALKER", "#8ebfff"), ("RANK_NEWBIE", "#9ddeaf"), ("DEFAULT", "#efeae2"), ("QUEST_ITEM", "#efeae2"),
-        ):
-            self.item_tree.tag_configure(rank, foreground=color)
-        scroll = ttk.Scrollbar(left, orient="vertical", command=self.item_tree.yview)
-        self.item_tree.configure(yscrollcommand=scroll.set)
-        self.item_tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        self.item_tree.bind("<Double-1>", lambda e: self.show_lots())
-        self.item_tree.bind("<Return>", lambda e: self.show_lots())
-        filters = tk.Frame(right, bg="#1b1814")
-        filters.pack(fill="x", pady=(0, 4))
-        tk.Label(filters, text="Редкость", bg="#1b1814", fg="#9c9486", font=("Segoe UI", 10)).pack(side="left")
-        self.lot_q = tk.StringVar(value="Все")
-        qbox = ttk.Combobox(filters, textvariable=self.lot_q, values=["Все", *agent.QLT], width=16, state="readonly", font=("Segoe UI", 10))
-        qbox.pack(side="left", padx=4)
-        qbox.bind("<<ComboboxSelected>>", self._refill_open)
-        tk.Label(filters, text="Заточка", bg="#1b1814", fg="#9c9486", font=("Segoe UI", 10)).pack(side="left", padx=(8, 4))
-        self.lot_ptn_min = ttk.Spinbox(filters, from_=0, to=15, width=3, font=("Segoe UI", 10), command=self._refill_open)
-        self.lot_ptn_max = ttk.Spinbox(filters, from_=0, to=15, width=3, font=("Segoe UI", 10), command=self._refill_open)
-        self.lot_ptn_min.set("0")
-        self.lot_ptn_max.set("15")
-        self.lot_ptn_min.pack(side="left")
-        tk.Label(filters, text="—", bg="#1b1814", fg="#9c9486").pack(side="left", padx=2)
-        self.lot_ptn_max.pack(side="left")
-        ttk.Button(filters, text="Открыть", style="Gold.TButton", command=self.show_lots).pack(side="left", padx=8)
-        self.lot_info = tk.StringVar(value="Каталог грузится…")
-        tk.Label(right, textvariable=self.lot_info, bg="#1b1814", fg="#cbbfa8", anchor="w", font=("Segoe UI", 10)).pack(fill="x")
-        inner = ttk.Notebook(right)
-        inner.pack(fill="both", expand=True, pady=4)
-        self.lot_tree = self._make_tree(inner, "Сейчас", ("Качество", "Заточка", "Штук", "Ставка", "Выкуп", "За штуку", "Осталось"))
-        self.sale_tree = self._make_tree(inner, "История", ("Когда", "Качество", "Заточка", "Штук", "Цена", "За штуку"))
-        threading.Thread(target=self._load_auction, daemon=True).start()
+        self.watch = []
+        self.auction = []
+        self.fav = set(self._read_json("auction_fav.json"))
+        self.recent = self._read_json("auction_recent.json")
+        self.lot_data = None
+        self.open_slug = None
 
     def _read_json(self, name):
         path = agent.DIR / name
@@ -229,257 +167,53 @@ class App:
     def _write_json(self, name, data):
         (agent.DIR / name).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-    def _load_auction(self):
+    def note(self, msg):
+        line = f"{time.strftime('%H:%M:%S')}  {msg}"
+        with self.lock:
+            self.logs.append(line)
+            self.logs = self.logs[-80:]
+            self.status = str(msg)[:80]
+
+    def _show(self, data):
+        if "buys" in data:
+            seen = []
+            for r in data.get("buys") or []:
+                slug = r.get("slug")
+                if slug and slug not in seen:
+                    seen.append(slug)
+            if seen:
+                self.watch = seen
+        fresh = rows_from(data)
+        with self.lock:
+            self.tables.update(fresh)
+            self.rev += 1
+
+    def boot(self):
+        saved = "5000000"
+        path = agent.DIR / "flip_budget.txt"
+        if path.exists():
+            saved = path.read_text(encoding="utf-8").strip() or saved
+        return {
+            "budget": saved,
+            "sections": [name for name, _key in SECTIONS],
+            "cats": [{"key": key, "title": title} for key, title in agent.AUCTION_CATS],
+            "qlt": ["Все", *agent.QLT],
+            "columns": TABLES,
+        }
+
+    def poll(self):
+        with self.lock:
+            return {
+                "status": self.status,
+                "busy": self.busy,
+                "logs": list(self.logs),
+                "tables": self.tables,
+                "rev": self.rev,
+            }
+
+    def _budget(self, text):
         try:
-            items = agent.auction_listing()
-        except Exception as e:
-            self.root.after(0, lambda err=e: self.lot_info.set(f"Каталог не загрузился: {err}"))
-            return
-        self._auction = items
-        self.root.after(0, self._render_auction)
-
-    def _cat_key(self):
-        title = self.auc_cat.get()
-        for key, name in agent.AUCTION_CATS:
-            if name == title:
-                return key
-        return "all"
-
-    def _render_auction(self):
-        if not self._auction:
-            return
-        query = self.auc_query.get().strip().casefold()
-        key = self._cat_key()
-        items = list(self._auction)
-        if key == "fav":
-            items = [i for i in items if i["id"] in self._fav]
-        elif key == "recent":
-            order = {slug: n for n, slug in enumerate(self._recent)}
-            items = [i for i in items if i["id"] in order]
-            items.sort(key=lambda i: order[i["id"]])
-        else:
-            allowed = agent.AUCTION_CAT_KEYS.get(key)
-            if key == "other":
-                named = set().union(*agent.AUCTION_CAT_KEYS.values())
-                items = [i for i in items if i["cat"] in allowed or i["cat"] not in named]
-            elif allowed:
-                items = [i for i in items if i["cat"] in allowed]
-            if self.auc_sort.get() == "По рангу":
-                items.sort(key=lambda i: (agent.RANK_ORDER.get(i["color"], 9), i["name"].casefold()))
-            else:
-                items.sort(key=lambda i: i["name"].casefold())
-        if query:
-            items = [i for i in items if query in i["name"].casefold() or query in i["id"].casefold()]
-        shown = items[:500]
-        kids = self.item_tree.get_children()
-        if kids:
-            self.item_tree.delete(*kids)
-        seen = set()
-        for item in shown:
-            iid = item["id"]
-            if iid in seen:
-                continue
-            seen.add(iid)
-            self.item_tree.insert("", "end", iid=iid, values=(item["name"], item["cat"], agent.RANK_NAME.get(item["color"], item["color"])), tags=(item["color"],))
-        self.lot_info.set(f"Найдено {len(items)}. Показано {len(shown)}. Двойной клик открывает лоты и историю.")
-
-    def _toggle_fav(self):
-        sel = self.item_tree.selection()
-        if not sel:
-            return
-        slug = sel[0]
-        if slug in self._fav:
-            self._fav.remove(slug)
-            self.log("Убрано из избранного")
-        else:
-            self._fav.add(slug)
-            self.log("Добавлено в избранное")
-        self._write_json("auction_fav.json", sorted(self._fav))
-        if self._cat_key() == "fav":
-            self._render_auction()
-
-    def _refill_open(self, *_args):
-        if self._lot_data and self._open_slug:
-            self._fill_lots(self._lot_name, self._lot_data)
-
-    def show_lots(self):
-        sel = self.item_tree.selection()
-        if not sel:
-            self.log("Выбери предмет слева")
-            return
-        slug = sel[0]
-        name = self.item_tree.set(sel[0], "Предмет")
-        self._open_slug = slug
-        self._lot_name = name
-        self._recent = [slug] + [x for x in self._recent if x != slug]
-        self._recent = self._recent[:30]
-        self._write_json("auction_recent.json", self._recent)
-        self.lot_info.set(f"{name}: читаю лоты…")
-
-        def job():
-            try:
-                data = agent.item_view(slug)
-            except Exception as e:
-                self.root.after(0, lambda err=e: self.lot_info.set(f"Ошибка: {err}"))
-                return
-            self._lot_data = data
-            self.root.after(0, lambda: self._fill_lots(name, data))
-
-        threading.Thread(target=job, daemon=True).start()
-
-    def _make_tree(self, book, title, cols):
-        frame = tk.Frame(book, bg="#1b1814")
-        book.add(frame, text=title)
-        tree = ttk.Treeview(frame, columns=cols, show="headings")
-        tree._order = {}
-        for col in cols:
-            tree.heading(col, text=col, command=lambda c=col, t=tree: self._sort_col(t, c))
-            tree.column(col, width=150 if col in ("Качество", "Когда") else 100, anchor="w")
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scroll.set)
-        tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        menu = tk.Menu(tree, tearoff=0, bg="#2a251c", fg="#efeae2")
-        menu.add_command(label="Копировать строку", command=lambda t=tree: self._copy_row(t))
-        tree.bind("<Button-3>", lambda e, t=tree, m=menu: self._popup(e, t, m))
-        tree.bind("<Control-c>", lambda e, t=tree: self._copy_row(t))
-        tree.tag_configure("buy", foreground="#9dccff")
-        tree.tag_configure("skip", foreground="#8d877c")
-        for qi, color in (
-            (0, "#c8c2b8"),
-            (1, "#7dcea0"),
-            (2, "#5dade2"),
-            (3, "#c39bd3"),
-            (4, "#e07a7a"),
-            (5, "#f0d78c"),
-        ):
-            tree.tag_configure(f"q{qi}", foreground=color)
-        return tree
-
-    def _pass_lot(self, row):
-        qname = self.lot_q.get()
-        if qname != "Все" and row["qname"] != qname:
-            return False
-        try:
-            lo = int(self.lot_ptn_min.get() or 0)
-            hi = int(self.lot_ptn_max.get() or 15)
-        except ValueError:
-            lo, hi = 0, 15
-        if row["qlt"] is not None and not lo <= row["ptn"] <= hi:
-            return False
-        return True
-
-    def _fill_lots(self, name, data):
-        lots = [r for r in data["lots"] if self._pass_lot(r)]
-        sales = [r for r in data["sales"] if self._pass_lot(r)]
-        lot_rows = []
-        for r in lots:
-            buy = money(r["buyout"]) if r["buyout"] else "—"
-            unit = f"{r['unit']:.0f}" if r["unit"] else "—"
-            start = money(r["start"]) if r["start"] else "—"
-            ptn = f"+{r['ptn']}" if r["qlt"] is not None else "—"
-            tag = f"q{r['qlt']}" if r["qlt"] is not None else ("buy" if r["buyout"] else "skip")
-            lot_rows.append(((r["qname"], ptn, r["amount"], start, buy, unit, r["left"]), tag))
-        sale_rows = []
-        for r in sales:
-            ptn = f"+{r['ptn']}" if r["qlt"] is not None else "—"
-            tag = f"q{r['qlt']}" if r["qlt"] is not None else "skip"
-            sale_rows.append(((r["time"], r["qname"], ptn, r["amount"], money(r["price"]), f"{r['unit']:.0f}"), tag))
-        self._put_tree(self.lot_tree, lot_rows)
-        self._put_tree(self.sale_tree, sale_rows)
-        priced = [r["unit"] for r in lots if r["unit"]]
-        cheap = min(priced) if priced else 0
-        self.lot_info.set(
-            f"{name}: на аукционе {data['total']}, показано {len(lots)}. "
-            + (f"Самый дешёвый выкуп {money(cheap)} за штуку." if cheap else "С выкупом ничего нет.")
-        )
-        self.log(self.lot_info.get())
-
-    def _put_tree(self, tree, rows):
-        kids = tree.get_children()
-        if kids:
-            tree.delete(*kids)
-        for values, tag in rows:
-            tree.insert("", "end", values=values, tags=(tag,))
-
-    def _copy_row(self, tree):
-        sel = tree.selection()
-        if not sel:
-            return "break"
-        text = "  ".join(str(v) for v in tree.item(sel[0], "values"))
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self.log(f"Скопировано: {text}")
-        return "break"
-
-    def log(self, msg):
-        line = f"{time.strftime('%H:%M:%S')}  {msg}\n"
-        self.box.configure(state="normal")
-        self.box.insert("end", line)
-        self.box.see("end")
-        last = int(float(self.box.index("end-1c")))
-        if last > 80:
-            self.box.delete("1.0", f"{last - 80}.0")
-        self.box.configure(state="disabled")
-        self.state.set(msg[:80])
-
-    def post(self, msg):
-        self.ui.put(("log", msg))
-
-    def show(self, data):
-        self.ui.put(("fill", data))
-
-    def _pump(self):
-        try:
-            while True:
-                kind, payload = self.ui.get_nowait()
-                if kind == "log":
-                    self.log(payload)
-                elif kind == "fill":
-                    self.fill(payload)
-                elif kind == "busy":
-                    self._busy(payload)
-        except queue.Empty:
-            pass
-        self.root.after(150, self._pump)
-
-    def _busy(self, on):
-        state = "disabled" if on else "normal"
-        self.btn_run.configure(state=state)
-        self.btn_auto.configure(state=state)
-        self.btn_live.configure(state=state)
-        self.btn_stop.configure(state="normal" if on else "disabled")
-        self.minutes.configure(state=state)
-        self.budget_box.configure(state=state)
-        self.section_box.configure(state="disabled" if on else "readonly")
-
-    def start_live(self):
-        items = [i for i in self._auction if i["id"] in self._fav][:25]
-        if not items and self._watch:
-            by_id = {i["id"]: i for i in self._auction}
-            items = [by_id[slug] for slug in self._watch if slug in by_id][:25]
-        if not items:
-            self.log("Онлайн следит за избранным или за текущим выкупом. Отметь предметы или дождись первого прогона.")
-            return
-        self.log(f"Нажат «Онлайн», предметов {len(items)}")
-        try:
-            self._launch_live(items)
-        except Exception as e:
-            self.log(f"Онлайн не стартовал: {e}")
-            self.ui.put(("busy", False))
-
-    def _launch_live(self, items):
-        if self.worker and self.worker.is_alive():
-            return
-        agent.HALT.clear()
-        self._busy(True)
-        budget = self._budget()
-        self.worker = threading.Thread(target=self._live_job, args=(items, budget), daemon=True)
-        self.worker.start()
-
-    def _budget(self):
-        try:
-            value = agent.parse_money(self.budget.get())
+            value = agent.parse_money(text)
         except Exception:
             value = 5_000_000
         try:
@@ -488,107 +222,117 @@ class App:
             pass
         return value
 
-    def _live_job(self, items, budget):
-        while not agent.HALT.is_set():
-            deals = []
-            for it in items:
-                if agent.HALT.is_set():
-                    break
-                try:
-                    agent.drop_market(it["id"])
-                    book = agent.market_book(it["id"], 1)
-                    single = it.get("cat") != "other" and it.get("cat") not in ("misc", "supply", "bullet", "medicine")
-                    deals.extend(agent._as_buys(agent.find_flips(book, it["id"], it["name"], allow_single=single or it.get("cat") == "artefact")))
-                except Exception as e:
-                    self.post(f"{it['name']}: {e}")
-                shown = agent.fit_budget(deals, budget)
-                self.show({"buys": shown})
-                self.post(f"Онлайн: {it['name']}, в таблице {len(shown)}")
-            for _ in range(3):
-                if agent.HALT.is_set():
-                    break
-                time.sleep(1)
-        self.post("Онлайн остановлен")
-        self.ui.put(("busy", False))
+    def _set_busy(self, on):
+        with self.lock:
+            self.busy = on
 
-    def start_once(self):
-        self.log("Нажата кнопка «Прогон»")
-        try:
-            self._launch(False)
-        except Exception as e:
-            self.log(f"Прогон не стартовал: {e}")
-            self._busy(False)
-
-    def start_auto(self):
-        self.log("Нажата кнопка «Автопрогон»")
-        try:
-            self._launch(True)
-        except Exception as e:
-            self.log(f"Автопрогон не стартовал: {e}")
-            self._busy(False)
-
-    def _launch(self, auto):
+    def start_run(self, auto, minutes, budget, section):
         if self.worker and self.worker.is_alive():
-            return
+            return {"ok": False, "error": "Уже идёт"}
         try:
-            mins = max(1, int(self.minutes.get()))
-        except ValueError:
+            mins = max(1, int(minutes))
+        except (TypeError, ValueError):
             mins = 30
-        only = self.section_map.get(self.section.get())
+        only = dict(SECTIONS).get(section or "Общий")
         if only != "buys":
             mins = max(5, mins)
         agent.HALT.clear()
-        self._busy(True)
-        only = self.section_map.get(self.section.get())
-        title = self.section.get()
-        self.log(("Автопрогон: " if auto else "Прогон: ") + title)
-        budget = self._budget()
-        self.worker = threading.Thread(target=self._job, args=(auto, mins, only, budget), daemon=True)
+        self._set_busy(True)
+        title = section or "Общий"
+        self.note(("Автопрогон: " if auto else "Прогон: ") + title)
+        money_budget = self._budget(budget)
+        self.worker = threading.Thread(target=self._job, args=(bool(auto), mins, only, money_budget), daemon=True)
         self.worker.start()
+        return {"ok": True}
 
-    def stop(self):
+    def stop_run(self):
         agent.HALT.set()
-        self.log("Стоп")
+        self.note("Стоп")
+        return {"ok": True}
 
-    def _job(self, auto, mins, only, budget):
-        while not agent.HALT.is_set():
-            self.post("Читаю цены")
-            try:
-                def on_update(deals, done, total):
-                    self.show({"buys": list(deals)})
-                    self.post(f"Выкуп {done}/{total}, в таблице {len(deals)}")
-                data = agent.run_once(status=self.post, only=only, budget=budget, on_update=on_update if only == "buys" else None)
-            except Exception as e:
-                self.post(f"Ошибка: {e}")
-                data = {}
-            if agent.HALT.is_set():
-                self.post("Прогон остановлен")
-                break
-            self.show(data or {})
-            n = len((data or {}).get("buys") or [])
-            self.post("Готово" if only else f"Готово. Выкупать позиций: {n}")
-            if not auto:
-                break
-            self.post(f"Дальше цены выкупа обновляются сразу, полный круг через {mins} мин")
-            deadline = time.time() + mins * 60
-            while time.time() < deadline and not agent.HALT.is_set():
-                slugs = list(self._watch)
-                if slugs and only == "buys":
-                    fresh = self._refresh(slugs, budget)
-                    self.show({"buys": fresh})
-                    spent = sum(r["spend"] for r in fresh)
-                    self.post(f"Сейчас: {len(fresh)} лотов, вложено {agent.rub(spent)}")
-                for _ in range(12):
-                    if agent.HALT.is_set() or time.time() >= deadline:
+    def start_live(self, budget):
+        items = [i for i in self.auction if i["id"] in self.fav][:25]
+        if not items and self.watch:
+            by_id = {i["id"]: i for i in self.auction}
+            items = [by_id[slug] for slug in self.watch if slug in by_id][:25]
+        if not items:
+            self.note("Онлайн следит за избранным или за текущим выкупом. Отметь предметы или дождись первого прогона.")
+            return {"ok": False}
+        if self.worker and self.worker.is_alive():
+            return {"ok": False, "error": "Уже идёт"}
+        self.note(f"Онлайн, предметов {len(items)}")
+        agent.HALT.clear()
+        self._set_busy(True)
+        self.worker = threading.Thread(target=self._live_job, args=(items, self._budget(budget)), daemon=True)
+        self.worker.start()
+        return {"ok": True}
+
+    def _live_job(self, items, budget):
+        try:
+            while not agent.HALT.is_set():
+                deals = []
+                for it in items:
+                    if agent.HALT.is_set():
+                        break
+                    try:
+                        agent.drop_market(it["id"])
+                        book = agent.market_book(it["id"], 1)
+                        single = it.get("cat") not in ("other", "misc", "supply", "bullet", "medicine")
+                        deals.extend(agent._as_buys(agent.find_flips(book, it["id"], it["name"], allow_single=single or it.get("cat") == "artefact")))
+                    except Exception as e:
+                        self.note(f"{it['name']}: {e}")
+                    shown = agent.fit_budget(deals, budget)
+                    self._show({"buys": shown})
+                    self.note(f"Онлайн: {it['name']}, в таблице {len(shown)}")
+                for _ in range(3):
+                    if agent.HALT.is_set():
                         break
                     time.sleep(1)
-            if agent.HALT.is_set():
-                self.post("Автопрогон остановлен")
-                break
-        self.ui.put(("busy", False))
+            self.note("Онлайн остановлен")
+        finally:
+            self._set_busy(False)
+
+    def _job(self, auto, mins, only, budget):
+        try:
+            while not agent.HALT.is_set():
+                self.note("Читаю цены")
+                try:
+                    def on_update(deals, done, total):
+                        self._show({"buys": list(deals)})
+                        self.note(f"Выкуп {done}/{total}, в таблице {len(deals)}")
+                    data = agent.run_once(status=self.note, only=only, budget=budget, on_update=on_update if only == "buys" else None)
+                except Exception as e:
+                    self.note(f"Ошибка: {e}")
+                    data = {}
+                if agent.HALT.is_set():
+                    self.note("Прогон остановлен")
+                    break
+                self._show(data or {})
+                n = len((data or {}).get("buys") or [])
+                self.note("Готово" if only else f"Готово. Выкупать позиций: {n}")
+                if not auto:
+                    break
+                self.note(f"Дальше цены выкупа обновляются сразу, полный круг через {mins} мин")
+                deadline = time.time() + mins * 60
+                while time.time() < deadline and not agent.HALT.is_set():
+                    slugs = list(self.watch)
+                    if slugs and only == "buys":
+                        fresh = self._refresh(slugs, budget)
+                        self._show({"buys": fresh})
+                        spent = sum(r["spend"] for r in fresh)
+                        self.note(f"Сейчас: {len(fresh)} лотов, вложено {agent.rub(spent)}")
+                    for _ in range(12):
+                        if agent.HALT.is_set() or time.time() >= deadline:
+                            break
+                        time.sleep(1)
+                if agent.HALT.is_set():
+                    self.note("Автопрогон остановлен")
+                    break
+        finally:
+            self._set_busy(False)
 
     def _refresh(self, slugs, budget):
-        by_id = {i["id"]: i for i in self._auction}
+        by_id = {i["id"]: i for i in self.auction}
         stack_cats = {"other", "misc", "supply", "bullet", "medicine"}
         deals = []
         for slug in slugs:
@@ -601,193 +345,451 @@ class App:
                 single = info.get("cat") not in stack_cats
                 deals.extend(agent._as_buys(agent.find_flips(book, slug, info.get("name") or slug, allow_single=single)))
             except Exception as e:
-                self.post(f"{info.get('name') or slug}: {e}")
+                self.note(f"{info.get('name') or slug}: {e}")
         return agent.fit_budget(deals, budget)
 
-    def _put(self, title, rows):
-        tree = self.trees[title]
-        kids = tree.get_children()
-        if kids:
-            tree.delete(*kids)
-        for values, tag in rows:
-            tree.insert("", "end", values=values, tags=(tag,))
-        if tree._order:
-            col, desc = next(iter(tree._order.items()))
-            self._apply_sort(tree, col, desc)
-
-    def _popup(self, event, tree, menu):
-        row = tree.identify_row(event.y)
-        if row:
-            tree.selection_set(row)
-            tree.focus(row)
-        menu.tk_popup(event.x_root, event.y_root)
-        menu.grab_release()
-
-    def _copy_name(self, tree):
-        sel = tree.selection()
-        if not sel:
-            return "break"
-        vals = tree.item(sel[0], "values")
-        if not vals:
-            return "break"
-        name = str(vals[0])
-        self.root.clipboard_clear()
-        self.root.clipboard_append(name)
-        self.log(f"Скопировано: {name}")
-        return "break"
-
-    def _sort_value(self, text):
-        raw = str(text).strip().replace(" ", "").replace(",", ".").lower()
-        if raw in ("", "—", "-"):
-            return (1, 0.0, "")
-        mult = 1.0
-        body = raw
-        if body.endswith("кк"):
-            mult = 1000000.0
-            body = body[:-2]
-        elif body.endswith("к"):
-            mult = 1000.0
-            body = body[:-1]
+    def load_catalog(self):
         try:
-            return (0, float(body) * mult, "")
-        except ValueError:
-            nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", raw)]
-            if nums:
-                return (0, max(nums), raw)
-            return (2, 0.0, raw)
+            items = agent.auction_listing()
+        except Exception as e:
+            self.note(f"Каталог не загрузился: {e}")
+            return {"ok": False, "error": str(e), "items": []}
+        self.auction = items
+        self.note(f"Каталог: {len(items)} предметов")
+        return {
+            "ok": True,
+            "items": [
+                {
+                    "id": i["id"],
+                    "name": i["name"],
+                    "cat": i["cat"],
+                    "color": i.get("color") or "DEFAULT",
+                    "rank": agent.RANK_NAME.get(i.get("color"), i.get("color") or ""),
+                    "order": agent.RANK_ORDER.get(i.get("color"), 9),
+                }
+                for i in items
+            ],
+        }
 
-    def _sort_col(self, tree, col):
-        desc = False if tree._order.get(col) else True
-        tree._order = {col: desc}
-        self._apply_sort(tree, col, desc)
+    def toggle_fav(self, slug):
+        if not slug:
+            return {"fav": False}
+        if slug in self.fav:
+            self.fav.remove(slug)
+            self.note("Убрано из избранного")
+            on = False
+        else:
+            self.fav.add(slug)
+            self.note("Добавлено в избранное")
+            on = True
+        self._write_json("auction_fav.json", sorted(self.fav))
+        return {"fav": on, "ids": sorted(self.fav)}
 
-    def _apply_sort(self, tree, col, desc):
-        kids = list(tree.get_children(""))
-        kids.sort(key=lambda k: self._sort_value(tree.set(k, col)), reverse=desc)
-        for i, k in enumerate(kids):
-            tree.move(k, "", i)
-        for c in tree["columns"]:
-            mark = ""
-            if c == col:
-                mark = " ↓" if desc else " ↑"
-            tree.heading(c, text=c + mark, command=lambda name=c, t=tree: self._sort_col(t, name))
+    def favs(self):
+        return {"ids": sorted(self.fav), "recent": list(self.recent)}
 
-    def _tag(self, act):
-        text = act or ""
-        if "ВЫКУП" in text and "НЕ" not in text:
-            return "buy"
-        if text.startswith("СЛИТ"):
-            return "sell"
-        if text.startswith("ДЕРЖ"):
-            return "hold"
-        return "skip"
+    def cat_keys(self):
+        return {key: sorted(names) for key, names in agent.AUCTION_CAT_KEYS.items()}
 
-    def _side(self, rows):
-        out = []
-        for r in rows:
-            if r.get("err"):
-                out.append(((r["name"], "—", r["err"], "—"), "skip"))
-                continue
-            why = r.get("why") or ""
-            buy = r.get("buy") or ""
-            note = f"{buy} · {why}" if why else buy
-            out.append(((r["name"], money(r.get("med", 0)), note, r.get("farm") or ""), self._tag(buy)))
-        return out
+    def open_item(self, slug, name, qname, lo, hi):
+        if not slug:
+            return {"ok": False, "error": "Выбери предмет слева"}
+        self.open_slug = slug
+        self.recent = [slug] + [x for x in self.recent if x != slug]
+        self.recent = self.recent[:30]
+        self._write_json("auction_recent.json", self.recent)
+        self.note(f"{name}: читаю лоты…")
+        try:
+            data = agent.item_view(slug)
+        except Exception as e:
+            self.note(f"Ошибка: {e}")
+            return {"ok": False, "error": str(e)}
+        self.lot_data = data
+        return self._lots_payload(name, data, qname, lo, hi)
 
-    def _sell(self, rows, pack=False):
-        out = []
-        for r in rows:
-            if r.get("err"):
-                vals = (r["name"], "—", r["err"], "—", "—") if pack else (r["name"], "—", r["err"], "—")
-                out.append((vals, "skip"))
-                continue
-            price = money(r.get("ask", r.get("med", 0)))
-            note = r.get("farm") or ""
-            if r.get("why"):
-                note = f"{note}: {r['why']}"
-            if pack:
-                vals = (r["name"], money(r.get("med", 0)), price, r.get("pack") or "—", note)
-            else:
-                vals = (r["name"], money(r.get("med", 0)), price, note)
-            out.append((vals, self._tag(r.get("farm"))))
-        return out
+    def filter_open(self, qname, lo, hi):
+        if not self.lot_data:
+            return {"ok": False}
+        return self._lots_payload("", self.lot_data, qname, lo, hi)
 
-    def fill(self, data):
-        if "buys" in data:
-            seen = []
-            for r in data.get("buys") or []:
-                slug = r.get("slug")
-                if slug and slug not in seen:
-                    seen.append(slug)
-            if seen:
-                self._watch = seen
-            buys = []
-            for r in data.get("buys") or []:
-                tag = f"q{r['qlt_i']}" if r.get("qlt_i") is not None else "buy"
-                buys.append((
-                    (r["name"], r.get("qlt") or "—", r.get("ptn") or "—", f"{r['copies']} x {r['amount']}", money(r["buyout"]), f"{r['unit']:.0f}", f"{r['med']:.0f}", money(r["med"] * r["amount"]), money(r["gain"]), f"{r.get('per_h', 0):.1f}", "ВЫКУПИТЬ"),
-                    tag,
-                ))
-            self._put("Выкуп", buys)
-        if "farm" in data:
-            self._put("Фарм", self._sell(data.get("farm") or [], pack=True))
-        if "arsenal" in data:
-            self._put("Арсенал", self._sell(data.get("arsenal") or []))
-        if "shelter_buy" in data:
-            mats = []
-            for r in data.get("shelter_buy") or []:
-                if r.get("err"):
-                    mats.append(((r["name"], "—", r["err"], "—"), "skip"))
-                else:
-                    mats.append(((r["name"], money(r.get("med", 0)), r.get("why") or "", r.get("buy") or ""), self._tag(r.get("buy"))))
-            self._put("Убежище купить", mats)
-        if "shelter_sell" in data:
-            self._put("Убежище продать", self._sell(data.get("shelter_sell") or []))
-        if "consumables" in data:
-            self._put("Расходники", self._side(data.get("consumables") or []))
-        if "arts" in data:
-            arts = []
-            for r in data.get("arts") or []:
-                if r.get("err"):
-                    arts.append(((r["name"], "—", "—", "—", "—", "—", "—", r["err"]), "skip"))
-                else:
-                    tag = f"q{r['qlt_i']}" if r.get("qlt_i") is not None else "skip"
-                    arts.append(((r["name"], r.get("qlt") or "—", r.get("ptn") or "—", r["n"], money(r["cheap"]), money(r["med"]), money(r["net"]), r.get("liq") or "БРАТЬ"), tag))
-            self._put("Арты", arts)
-        if "protos" in data:
-            protos = []
-            for r in data.get("protos") or []:
-                if r.get("err"):
-                    protos.append(((r.get("qlt") or r["name"], "—", r["err"], "—", "—", "—", "—"), "skip"))
-                else:
-                    decision = r.get("buy") or ""
-                    protos.append((
-                        (r.get("qlt", ""), r.get("n", ""), decision, r.get("farm", ""), money(r.get("cheap", 0)), money(r.get("med", 0)), money(r.get("net", 0))),
-                        self._tag(decision if decision == "ВЫКУПИТЬ" else r.get("farm")),
-                    ))
-            self._put("Протоартефакты", protos)
+    def _pass(self, row, qname, lo, hi):
+        if qname and qname != "Все" and row["qname"] != qname:
+            return False
+        try:
+            lo_n = int(lo)
+            hi_n = int(hi)
+        except (TypeError, ValueError):
+            lo_n, hi_n = 0, 15
+        if row["qlt"] is not None and not lo_n <= row["ptn"] <= hi_n:
+            return False
+        return True
+
+    def _lots_payload(self, name, data, qname, lo, hi):
+        lots = [r for r in data["lots"] if self._pass(r, qname, lo, hi)]
+        sales = [r for r in data["sales"] if self._pass(r, qname, lo, hi)]
+        lot_rows = []
+        for r in lots:
+            buy = money(r["buyout"]) if r["buyout"] else "—"
+            unit = f"{r['unit']:.0f}" if r["unit"] else "—"
+            start = money(r["start"]) if r["start"] else "—"
+            ptn = f"+{r['ptn']}" if r["qlt"] is not None else "—"
+            tag = f"q{r['qlt']}" if r["qlt"] is not None else ("buy" if r["buyout"] else "skip")
+            lot_rows.append({"cells": [r["qname"], ptn, r["amount"], start, buy, unit, r["left"]], "tag": tag})
+        sale_rows = []
+        for r in sales:
+            ptn = f"+{r['ptn']}" if r["qlt"] is not None else "—"
+            tag = f"q{r['qlt']}" if r["qlt"] is not None else "skip"
+            sale_rows.append({"cells": [r["time"], r["qname"], ptn, r["amount"], money(r["price"]), f"{r['unit']:.0f}"], "tag": tag})
+        priced = [r["unit"] for r in lots if r["unit"]]
+        cheap = min(priced) if priced else 0
+        info = f"На аукционе {data['total']}, показано {len(lots)}. "
+        info += f"Самый дешёвый выкуп {money(cheap)} за штуку." if cheap else "С выкупом ничего нет."
+        if name:
+            info = f"{name}: {info}"
+            self.note(info)
+        return {"ok": True, "info": info, "lots": lot_rows, "sales": sale_rows}
+
+
+PAGE = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<title>STALZONE</title>
+<style>
+  :root {
+    --bg: #12100e;
+    --panel: #1b1814;
+    --line: #3a3126;
+    --gold: #e0b15a;
+    --ink: #efeae2;
+    --dim: #9c9486;
+    --buy: #9dccff;
+    --sell: #9ddeaf;
+    --hold: #e0b15a;
+    --skip: #8d877c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.35 "Segoe UI", sans-serif; }
+  button, select, input { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 0; border-radius: 8px; padding: 8px 14px; background: #2a251c; color: var(--gold); }
+  button:hover { background: #3a3122; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.gold { background: var(--gold); color: #1a140c; font-weight: 700; }
+  button.gold:hover { background: #f0d7a2; }
+  button.stop { background: #6b3030; color: #f6d0c8; }
+  header { display: flex; gap: 10px; align-items: center; padding: 14px 16px 8px; }
+  h1 { margin: 0; font-size: 20px; color: var(--gold); letter-spacing: 0.04em; }
+  #status { color: var(--dim); }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 16px 10px; }
+  input, select { background: #100e0c; border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; }
+  input { width: 88px; text-align: center; }
+  #q { width: 220px; text-align: left; }
+  .tabs { display: flex; gap: 6px; padding: 0 16px; overflow-x: auto; }
+  .tabs button { background: transparent; color: var(--dim); border-radius: 8px 8px 0 0; }
+  .tabs button.on { background: var(--panel); color: var(--gold); }
+  main { height: calc(100% - 168px); margin: 0 16px; background: var(--panel); border-radius: 0 10px 10px 10px; overflow: hidden; }
+  .view { display: none; height: 100%; }
+  .view.on { display: block; }
+  .sheet { height: 100%; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 7px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid #2a251c; }
+  th { position: sticky; top: 0; background: #2a251c; color: #cbbfa8; cursor: pointer; }
+  tr:hover td { background: #241f18; }
+  .buy { color: var(--buy); } .sell { color: var(--sell); } .hold { color: var(--hold); } .skip { color: var(--skip); }
+  .q0 { color: #c8c2b8; } .q1 { color: #7dcea0; } .q2 { color: #5dade2; }
+  .q3 { color: #c39bd3; } .q4 { color: #e07a7a; } .q5 { color: #f0d78c; }
+  .RANK_LEGEND { color: #e0b15a; } .RANK_MASTER { color: #e07a7a; } .RANK_VETERAN { color: #c4a3ff; }
+  .RANK_STALKER { color: #8ebfff; } .RANK_NEWBIE { color: #9ddeaf; } .DEFAULT { color: var(--ink); }
+  #log { height: 92px; margin: 8px 16px 12px; overflow: auto; background: #100e0c; color: #d9d3c7; padding: 8px 10px; border-radius: 8px; font: 12px/1.4 Consolas, monospace; white-space: pre-wrap; }
+  .auc { display: grid; grid-template-columns: 340px 1fr; height: 100%; }
+  .side, .lots { overflow: auto; height: 100%; }
+  .side { border-right: 1px solid var(--line); }
+  .tools { display: flex; gap: 8px; align-items: center; padding: 8px; position: sticky; top: 0; background: var(--1b1814, #1b1814); z-index: 1; flex-wrap: wrap; }
+  .pick { cursor: pointer; }
+  .pick.on td { background: #3a3122; }
+  #lotinfo { color: #cbbfa8; padding: 4px 8px; }
+  .sub { display: flex; gap: 6px; padding: 0 8px; }
+  .sub button.on { color: var(--gold); }
+</style>
+</head>
+<body>
+<header>
+  <h1>STALZONE</h1>
+  <div id="status">ожидание</div>
+</header>
+<div class="bar">
+  <button class="gold" id="run">Прогон</button>
+  <button id="auto">Автопрогон</button>
+  <button id="live">Онлайн</button>
+  <span>каждые</span>
+  <input id="mins" value="30"/>
+  <span>мин</span>
+  <span>бюджет</span>
+  <input id="budget" value="5000000"/>
+  <button class="stop" id="stop" disabled>Стоп</button>
+  <select id="section"></select>
+</div>
+<div class="tabs" id="tabs"></div>
+<main id="main"></main>
+<div id="log"></div>
+<script>
+const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
+const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now"};
+const $ = (id) => document.getElementById(id);
+
+function sortValue(text) {
+  const raw = String(text ?? "").trim().replace(/ /g, "").replace(",", ".").toLowerCase();
+  if (!raw || raw === "—" || raw === "-") return [1, 0, ""];
+  let mult = 1, body = raw;
+  if (body.endsWith("кк")) { mult = 1e6; body = body.slice(0, -2); }
+  else if (body.endsWith("к")) { mult = 1e3; body = body.slice(0, -1); }
+  const n = Number(body);
+  if (!Number.isNaN(n)) return [0, n * mult, ""];
+  const nums = raw.match(/\d+(?:\.\d+)?/g);
+  if (nums) return [0, Math.max(...nums.map(Number)), raw];
+  return [2, 0, raw];
+}
+
+function paint(key) {
+  const box = $("t-" + key);
+  if (!box) return;
+  const cols = state.columns[key] || [];
+  const rows = (state.tables[key] || []).slice();
+  const rule = state.sort[key];
+  if (rule) {
+    rows.sort((a, b) => {
+      const av = sortValue(a.cells[rule.i]);
+      const bv = sortValue(b.cells[rule.i]);
+      const c = av[0] - bv[0] || av[1] - bv[1] || String(av[2]).localeCompare(String(bv[2]), "ru");
+      return rule.desc ? -c : c;
+    });
+  }
+  const head = cols.map((c, i) => `<th data-i="${i}">${c}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
+  const body = rows.map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
+  box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  box.querySelectorAll("th").forEach(th => th.onclick = () => {
+    const i = Number(th.dataset.i);
+    const prev = state.sort[key];
+    state.sort[key] = {i, desc: prev && prev.i === i ? !prev.desc : true};
+    paint(key);
+  });
+  box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => navigator.clipboard.writeText(tr.cells[0].textContent));
+}
+
+function build() {
+  const tabs = $("tabs");
+  const main = $("main");
+  TAB_ORDER.forEach((key, n) => {
+    const b = document.createElement("button");
+    b.textContent = TAB_NAME[key];
+    b.className = n ? "" : "on";
+    b.onclick = () => show(key);
+    tabs.appendChild(b);
+    const view = document.createElement("div");
+    view.className = "view sheet" + (n ? "" : " on");
+    view.id = "v-" + key;
+    view.innerHTML = `<div class="sheet" id="t-${key}"></div>`;
+    main.appendChild(view);
+  });
+  const b = document.createElement("button");
+  b.textContent = "Аукцион";
+  b.onclick = () => show("auc");
+  tabs.appendChild(b);
+  const view = document.createElement("div");
+  view.className = "view";
+  view.id = "v-auc";
+  view.innerHTML = `
+    <div class="auc">
+      <div class="side">
+        <div class="tools">
+          <input id="q" placeholder="Поиск"/>
+          <select id="cat"></select>
+          <select id="asort"><option>По имени</option><option>По рангу</option></select>
+          <button id="fav">В избранное</button>
+        </div>
+        <div id="items"></div>
+      </div>
+      <div class="lots">
+        <div class="tools">
+          <span>Редкость</span><select id="lq"></select>
+          <span>Заточка</span><input id="lo" value="0" style="width:52px"/><span>—</span><input id="hi" value="15" style="width:52px"/>
+          <button class="gold" id="open">Открыть</button>
+        </div>
+        <div id="lotinfo">Каталог грузится при открытии вкладки.</div>
+        <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
+        <div class="sheet" id="lotbox"></div>
+      </div>
+    </div>`;
+  main.appendChild(view);
+}
+
+function show(key) {
+  document.querySelectorAll(".tabs button").forEach((b, i) => b.classList.toggle("on", (TAB_ORDER[i] || "auc") === key));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
+  if (key === "auc" && !state.catalog.length) loadCatalog();
+}
+
+function esc(s) {
+  const amp = "\u0026";
+  return String(s ?? "")
+    .split("&").join(amp + "amp;")
+    .split("<").join(amp + "lt;")
+    .split(">").join(amp + "gt;")
+    .split('"').join(amp + "quot;");
+}
+
+let selected = null;
+function renderItems() {
+  const q = ($("q").value || "").trim().toLowerCase();
+  const key = $("cat").value || "all";
+  let items = state.catalog.slice();
+  if (key === "fav") items = items.filter(i => state.fav.has(i.id));
+  else if (key === "recent") {
+    const order = Object.fromEntries(state.recent.map((id, n) => [id, n]));
+    items = items.filter(i => order[i.id] !== undefined);
+    items.sort((a, b) => order[a.id] - order[b.id]);
+  } else if (key !== "all") {
+    const allowed = state.catKeys[key] || [];
+    if (key === "other") {
+      const named = new Set(Object.values(state.catKeys).flat());
+      items = items.filter(i => allowed.includes(i.cat) || !named.has(i.cat));
+    } else items = items.filter(i => allowed.includes(i.cat));
+  }
+  if (key !== "recent") {
+    if ($("asort").value === "По рангу") items.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ru"));
+    else items.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }
+  if (q) items = items.filter(i => i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q));
+  const shown = items.slice(0, 500);
+  $("lotinfo").textContent = `Найдено ${items.length}. Показано ${shown.length}. Клик по строке, потом «Открыть».`;
+  $("items").innerHTML = `<table><thead><tr><th>Предмет</th><th>Раздел</th><th>Ранг</th></tr></thead><tbody>${
+    shown.map(i => `<tr class="pick ${esc(i.color)} ${selected === i.id ? "on" : ""}" data-id="${esc(i.id)}"><td>${esc(i.name)}</td><td>${esc(i.cat)}</td><td>${esc(i.rank)}</td></tr>`).join("")
+  }</tbody></table>`;
+  $("items").querySelectorAll("tr.pick").forEach(tr => {
+    tr.onclick = () => {
+      selected = tr.dataset.id;
+      $("items").querySelectorAll("tr.pick").forEach(row => row.classList.toggle("on", row.dataset.id === selected));
+    };
+    tr.ondblclick = () => { selected = tr.dataset.id; openItem(); };
+  });
+}
+
+async function loadCatalog() {
+  $("lotinfo").textContent = "Читаю каталог EXBO…";
+  const data = await pywebview.api.load_catalog();
+  state.catalog = data.items || [];
+  const fav = await pywebview.api.favs();
+  state.fav = new Set(fav.ids || []);
+  state.recent = fav.recent || [];
+  renderItems();
+}
+
+function lotTable(rows, cols) {
+  const body = (rows || []).map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
+  $("lotbox").innerHTML = `<table><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function openItem() {
+  if (!selected) return;
+  const row = state.catalog.find(i => i.id === selected);
+  const name = row ? row.name : selected;
+  $("lotinfo").textContent = name + ": читаю лоты…";
+  const data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value);
+  if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; return; }
+  state.lots = data.lots; state.sales = data.sales;
+  $("lotinfo").textContent = data.info;
+  showLots();
+}
+
+function showLots() {
+  if (state.lot === "now") lotTable(state.lots, ["Качество","Заточка","Штук","Ставка","Выкуп","За штуку","Осталось"]);
+  else lotTable(state.sales, ["Когда","Качество","Заточка","Штук","Цена","За штуку"]);
+}
+
+function wire() {
+  $("run").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, $("section").value);
+  $("auto").onclick = () => pywebview.api.start_run(true, $("mins").value, $("budget").value, $("section").value);
+  $("live").onclick = () => pywebview.api.start_live($("budget").value);
+  $("stop").onclick = () => pywebview.api.stop_run();
+  $("q").oninput = renderItems;
+  $("cat").onchange = renderItems;
+  $("asort").onchange = renderItems;
+  $("fav").onclick = async () => {
+    if (!selected) return;
+    const r = await pywebview.api.toggle_fav(selected);
+    state.fav = new Set(r.ids || []);
+    if ($("cat").value === "fav") renderItems();
+  };
+  $("open").onclick = openItem;
+  $("lq").onchange = $("lo").onchange = $("hi").onchange = async () => {
+    const data = await pywebview.api.filter_open($("lq").value, $("lo").value, $("hi").value);
+    if (!data.ok) return;
+    state.lots = data.lots; state.sales = data.sales;
+    if (data.info) $("lotinfo").textContent = data.info;
+    showLots();
+  };
+  $("now").onclick = () => { state.lot = "now"; $("now").classList.add("on"); $("hist").classList.remove("on"); showLots(); };
+  $("hist").onclick = () => { state.lot = "hist"; $("hist").classList.add("on"); $("now").classList.remove("on"); showLots(); };
+}
+
+async function tick() {
+  const data = await pywebview.api.poll();
+  $("status").textContent = data.status || "";
+  $("log").textContent = (data.logs || []).join("\n");
+  $("log").scrollTop = $("log").scrollHeight;
+  ["run","auto","live","mins","budget","section"].forEach(id => $(id).disabled = !!data.busy);
+  $("stop").disabled = !data.busy;
+  if (data.rev !== state.rev) {
+    state.rev = data.rev;
+    state.tables = data.tables || {};
+    TAB_ORDER.forEach(paint);
+  }
+}
+
+window.addEventListener("pywebviewready", async () => {
+  const boot = await pywebview.api.boot();
+  state.columns = boot.columns;
+  $("section").innerHTML = boot.sections.map(s => `<option>${esc(s)}</option>`).join("");
+  $("budget").value = boot.budget;
+  build();
+  $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");
+  $("lq").innerHTML = boot.qlt.map(s => `<option>${esc(s)}</option>`).join("");
+  state.catKeys = await pywebview.api.cat_keys();
+  wire();
+  TAB_ORDER.forEach(paint);
+  setInterval(tick, 400);
+  tick();
+});
+</script>
+</body>
+</html>
+"""
+
+
+def main():
+    folder = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    if not (folder / "exbo.json").exists():
+        text = "Рядом с программой нет exbo.json. Положи ключ EXBO в ту же папку и запусти ещё раз."
+        (folder / "stalzone_gui_error.log").write_text(text, encoding="utf-8")
+        raise SystemExit(text)
+    try:
+        import webview
+    except ImportError as e:
+        text = "Нет окна. Поставь пакет: python -m pip install pywebview\n" + str(e)
+        (folder / "stalzone_gui_error.log").write_text(text, encoding="utf-8")
+        raise SystemExit(text)
+    bridge = Bridge()
+    webview.create_window("STALZONE", html=PAGE, js_api=bridge, width=1280, height=820, min_size=(960, 640))
+    webview.start()
 
 
 if __name__ == "__main__":
     try:
-        from pathlib import Path
-        folder = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-        if not (folder / "exbo.json").exists():
-            root = tk.Tk()
-            root.withdraw()
-            from tkinter import messagebox
-            messagebox.showerror(
-                "STALZONE",
-                "Рядом с программой нет exbo.json.\nПоложи ключ EXBO в ту же папку и запусти ещё раз.",
-            )
-            raise SystemExit(1)
-        App().root.mainloop()
+        main()
     except SystemExit:
         raise
     except Exception:
-        import traceback
-        from pathlib import Path
-        text = traceback.format_exc()
         folder = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-        (folder / "stalzone_gui_error.log").write_text(text, encoding="utf-8")
+        (folder / "stalzone_gui_error.log").write_text(traceback.format_exc(), encoding="utf-8")
         raise
