@@ -510,6 +510,9 @@ PAGE = r"""<!DOCTYPE html>
   #lotinfo { color: #cbbfa8; padding: 4px 8px; }
   .sub { display: flex; gap: 6px; padding: 0 8px; }
   .sub button.on { color: var(--gold); }
+  .mapwrap { display: flex; flex-direction: column; height: 100%; }
+  #mapbar button.on { background: var(--gold); color: #1a140c; }
+  #mapframe { flex: 1; width: 100%; border: 0; background: #0e0c0a; }
 </style>
 </head>
 <body>
@@ -583,6 +586,7 @@ function build() {
   TAB_ORDER.forEach((key, n) => {
     const b = document.createElement("button");
     b.textContent = TAB_NAME[key];
+    b.dataset.key = key;
     b.className = n ? "" : "on";
     b.onclick = () => show(key);
     tabs.appendChild(b);
@@ -594,6 +598,7 @@ function build() {
   });
   const b = document.createElement("button");
   b.textContent = "Аукцион";
+  b.dataset.key = "auc";
   b.onclick = () => show("auc");
   tabs.appendChild(b);
   const view = document.createElement("div");
@@ -622,12 +627,48 @@ function build() {
       </div>
     </div>`;
   main.appendChild(view);
+  const mapBtn = document.createElement("button");
+  mapBtn.textContent = "Карта";
+  mapBtn.dataset.key = "map";
+  mapBtn.onclick = () => show("map");
+  tabs.appendChild(mapBtn);
+  const mapView = document.createElement("div");
+  mapView.className = "view";
+  mapView.id = "v-map";
+  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><iframe id="mapframe" title="Карта"></iframe></div>`;
+  main.appendChild(mapView);
+  const maps = [
+    ["", "Все карты"],
+    ["south-zone", "Южная Зона"],
+    ["north-zone", "Северная Зона"],
+    ["wild-north", "Дикий Север"],
+    ["lyubech", "Любеч-3"],
+    ["labyrinth", "Лабиринт"],
+    ["graveyard", "Могильник"]
+  ];
+  maps.forEach(([slug, title]) => {
+    const btn = document.createElement("button");
+    btn.textContent = title;
+    btn.dataset.slug = slug;
+    btn.onclick = () => openMap(slug);
+    $("mapbar").appendChild(btn);
+  });
+}
+
+function openMap(slug) {
+  const frame = $("mapframe");
+  if (frame.dataset.slug !== slug) {
+    frame.dataset.slug = slug;
+    frame.src = slug ? "https://stalzone.wiki/maps/" + slug : "https://stalzone.wiki/maps";
+  }
+  document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === slug));
 }
 
 function show(key) {
-  document.querySelectorAll(".tabs button").forEach((b, i) => b.classList.toggle("on", (TAB_ORDER[i] || "auc") === key));
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
+  if (key === "map" && !$("mapframe").getAttribute("src")) openMap("");
 }
 
 function esc(s) {
