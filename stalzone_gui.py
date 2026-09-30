@@ -169,6 +169,8 @@ class Bridge:
             return {"error": "нет такой карты"}
         cached = self._wiki.get(slug)
         if cached:
+            cached = dict(cached)
+            cached["mine"] = self._marks_of(slug)
             return cached
         try:
             import httpx
@@ -182,6 +184,8 @@ class Bridge:
             pack["slug"] = slug
             pack["title"] = names[slug]
             self._wiki[slug] = pack
+            pack = dict(pack)
+            pack["mine"] = self._marks_of(slug)
             marks = sum(len(t["markers"]) for g in pack["groups"] for t in g["types"])
             self.note(f"Карта {names[slug]}: {marks} меток")
             return pack
@@ -269,6 +273,50 @@ class Bridge:
             "groups": groups,
             "areas": areas,
         }
+
+    def _marks_of(self, slug):
+        return [mark for mark in self._load_marks() if mark.get("slug") == slug]
+
+    def _load_marks(self):
+        path = agent.DIR / "wiki_marks.json"
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def add_mark(self, slug, lat, lng, title):
+        names = {
+            "south-zone", "north-zone", "wild-north", "lyubech", "labyrinth", "graveyard",
+        }
+        slug = str(slug or "").strip()
+        if slug not in names:
+            return []
+        try:
+            lat = float(lat)
+            lng = float(lng)
+        except (TypeError, ValueError):
+            return self._marks_of(slug)
+        title = str(title or "").strip()[:80] or "Метка"
+        rows = self._load_marks()
+        rows.append({
+            "id": str(int(time.time() * 1000)),
+            "slug": slug,
+            "lat": lat,
+            "lng": lng,
+            "title": title,
+        })
+        self._write_json("wiki_marks.json", rows)
+        self.note("Метка: " + title)
+        return self._marks_of(slug)
+
+    def delete_mark(self, slug, mark_id):
+        mark_id = str(mark_id or "")
+        rows = [mark for mark in self._load_marks() if str(mark.get("id")) != mark_id]
+        self._write_json("wiki_marks.json", rows)
+        return self._marks_of(str(slug or ""))
 
     def _read_json(self, name):
         path = agent.DIR / name
@@ -657,7 +705,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, hidden:{}, icons:{}};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
 const $ = (id) => document.getElementById(id);
 
 function sortValue(text) {
@@ -811,6 +859,8 @@ function drawWiki(pack) {
   }).addTo(wiki);
   state.wiki = wiki;
   state.pack = pack;
+  state.mine = pack.mine || [];
+  state.placing = false;
   state.hidden = {};
   state.icons = {};
   const bar = $("maplayers");
@@ -820,6 +870,33 @@ function drawWiki(pack) {
   search.placeholder = "Поиск метки";
   search.oninput = paintMarks;
   bar.appendChild(search);
+  const name = document.createElement("input");
+  name.id = "markname";
+  name.placeholder = "Своя метка";
+  bar.appendChild(name);
+  const put = document.createElement("button");
+  put.textContent = "Ставить";
+  put.onclick = () => {
+    state.placing = !state.placing;
+    put.classList.toggle("on", state.placing);
+    box.style.cursor = state.placing ? "crosshair" : "";
+  };
+  bar.appendChild(put);
+  const own = document.createElement("button");
+  own.textContent = "Свои";
+  own.className = "on";
+  own.onclick = () => {
+    state.hidden["Свои"] = !state.hidden["Свои"];
+    own.classList.toggle("on", !state.hidden["Свои"]);
+    paintMarks();
+  };
+  bar.appendChild(own);
+  wiki.on("click", async (event) => {
+    if (!state.placing) return;
+    const title = ($("markname").value || "").trim() || "Метка";
+    state.mine = await pywebview.api.add_mark(state.mapSlug, event.latlng.lat, event.latlng.lng, title);
+    paintMarks();
+  });
   pack.areas.forEach(area => {
     const button = document.createElement("button");
     button.textContent = area.title;
@@ -883,6 +960,24 @@ function paintMarks() {
       });
     });
   });
+  if (!state.hidden["Свои"]) {
+    (state.mine || []).forEach(mark => {
+      const blob = ("свои " + (mark.title || "")).toLowerCase();
+      if (query && !blob.includes(query)) return;
+      const point = L.circleMarker([mark.lat, mark.lng], {
+        radius: 7, color: "#e0b15a", fillColor: "#e0b15a", fillOpacity: 1, weight: 2
+      });
+      point.bindTooltip("Своя: " + mark.title);
+      point.on("click", async (event) => {
+        L.DomEvent.stopPropagation(event);
+        if (state.placing) return;
+        if (!confirm("Убрать метку «" + mark.title + "»?")) return;
+        state.mine = await pywebview.api.delete_mark(state.mapSlug, mark.id);
+        paintMarks();
+      });
+      point.addTo(layer);
+    });
+  }
   layer.addTo(state.wiki);
   state.marks = layer;
 }
