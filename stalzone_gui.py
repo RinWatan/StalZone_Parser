@@ -153,54 +153,122 @@ class Bridge:
         self.recent = self._read_json("auction_recent.json")
         self.lot_data = None
         self.open_slug = None
-        self.map_window = None
+        self._wiki = {}
 
-    def map_catalog(self):
-        fallback = [
-            {"slug": "", "title": "Все карты"},
-            {"slug": "severnaya-zona", "title": "Северная зона"},
-            {"slug": "yug", "title": "Южная зона"},
-            {"slug": "obitel-zaveta", "title": "Обитель «Завета»"},
-            {"slug": "peklo", "title": "Пекло"},
-            {"slug": "kolizey", "title": "Колизей"},
-        ]
+    def wiki_map(self, slug):
+        slug = str(slug or "").strip()
+        names = {
+            "south-zone": "Южная Зона",
+            "north-zone": "Северная Зона",
+            "wild-north": "Дикий Север",
+            "lyubech": "Любеч-3",
+            "labyrinth": "Лабиринт",
+            "graveyard": "Могильник",
+        }
+        if slug not in names:
+            return {"error": "нет такой карты"}
+        cached = self._wiki.get(slug)
+        if cached:
+            return cached
         try:
             import httpx
-            with httpx.Client(timeout=12) as client:
-                data = client.get("https://lunar-zone.ru/web-api/maps2d").json()
-            rows = [{"slug": "", "title": "Все карты"}]
-            for item in data.get("maps") or []:
-                slug = str(item.get("slug") or "").strip()
-                title = str(item.get("title") or slug).strip()
-                if slug and title:
-                    rows.append({"slug": slug, "title": title})
-            return rows if len(rows) > 1 else fallback
-        except Exception:
-            return fallback
-
-    def open_map(self, slug):
-        import re
-        slug = str(slug or "").strip()
-        if slug and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", slug):
-            return
-        url = "https://lunar-zone.ru/maps" + (("/" + slug) if slug else "")
-        try:
-            import webview
-            window = self.map_window
-            if window is not None:
-                try:
-                    window.load_url(url)
-                    window.show()
-                    self.note("Карта Лунара" + ((" — " + slug) if slug else ""))
-                    return
-                except Exception:
-                    self.map_window = None
-            self.map_window = webview.create_window(
-                "Карта", url, width=1280, height=820, background_color="#0e0c0a"
-            )
-            self.note("Карта Лунара" + ((" — " + slug) if slug else ""))
+            page = httpx.get(
+                "https://stalzone.wiki/maps/" + slug,
+                timeout=40,
+                headers={"User-Agent": "STALZONE"},
+            ).text
+            game = self._wiki_game(page)
+            pack = self._wiki_pack(game)
+            pack["slug"] = slug
+            pack["title"] = names[slug]
+            self._wiki[slug] = pack
+            marks = sum(len(t["markers"]) for g in pack["groups"] for t in g["types"])
+            self.note(f"Карта {names[slug]}: {marks} меток")
+            return pack
         except Exception as error:
-            self.note("Карта не открылась: " + str(error))
+            self.note("Карта не загрузилась: " + str(error))
+            return {"error": str(error)}
+
+    def _wiki_game(self, html):
+        import re
+        blobs = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html)
+        for blob in sorted(blobs, key=len, reverse=True):
+            try:
+                text = json.loads('"' + blob + '"')
+            except Exception:
+                continue
+            start = text.find('{"map":')
+            if start < 0:
+                continue
+            depth = 0
+            for index, char in enumerate(text[start:], start):
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return json.loads(text[start:index + 1])["map"]
+        raise ValueError("на странице нет карты")
+
+    def _wiki_text(self, value):
+        if isinstance(value, dict):
+            return str(value.get("ru") or value.get("en") or "")
+        return str(value or "")
+
+    def _wiki_pack(self, game):
+        settings = game.get("settings") or {}
+        groups = []
+        for group in game.get("marker_groups") or []:
+            types = []
+            for kind in group.get("marker_types") or []:
+                look = kind.get("settings") or {}
+                marks = []
+                for mark in kind.get("markers") or []:
+                    point = mark.get("coordinates") or {}
+                    if point.get("lat") is None or point.get("lng") is None:
+                        continue
+                    marks.append({
+                        "lat": point["lat"],
+                        "lng": point["lng"],
+                        "text": self._wiki_text(mark.get("description")),
+                    })
+                if marks:
+                    types.append({
+                        "title": self._wiki_text(kind.get("name")) or kind.get("slug") or "Метка",
+                        "color": look.get("color") or "#e0b15a",
+                        "image": look.get("image") or "",
+                        "markers": marks,
+                    })
+            if types:
+                groups.append({"title": self._wiki_text(group.get("name")) or "Метки", "types": types})
+        areas = []
+        for group in game.get("area_groups") or []:
+            for kind in group.get("area_types") or []:
+                look = kind.get("settings") or {}
+                polygons = []
+                for area in kind.get("areas") or []:
+                    points = area.get("coordinates") or []
+                    if len(points) >= 3:
+                        polygons.append(points)
+                if polygons:
+                    areas.append({
+                        "title": self._wiki_text(kind.get("name")) or "Зона",
+                        "fill": look.get("fill") or "#ff5050",
+                        "border": look.get("border") or "#ff5050",
+                        "polygons": polygons,
+                    })
+        return {
+            "settings": {
+                "tiles": settings.get("tiles") or "",
+                "minZoom": settings.get("minZoom") or 2,
+                "maxZoom": settings.get("maxZoom") or 4,
+                "defaultZoom": settings.get("defaultZoom") or 3,
+                "width": settings.get("width") or 2048,
+                "height": settings.get("height") or 2048,
+            },
+            "groups": groups,
+            "areas": areas,
+        }
 
     def _read_json(self, name):
         path = agent.DIR / name
@@ -503,6 +571,8 @@ PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8"/>
 <title>STALZONE</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
     --bg: #12100e;
@@ -559,8 +629,9 @@ PAGE = r"""<!DOCTYPE html>
   .sub { display: flex; gap: 6px; padding: 0 8px; }
   .sub button.on { color: var(--gold); }
   .mapwrap { display: flex; flex-direction: column; height: 100%; }
-  #mapbar button.on { background: var(--gold); color: #1a140c; }
-  .mapnote { color: var(--dim); padding: 18px; max-width: 640px; }
+  #mapbar button.on, #maplayers button.on { background: var(--gold); color: #1a140c; }
+  #mapq { width: 180px; text-align: left; }
+  #wikimap { flex: 1; min-height: 0; background: #0e0c0a; }
 </style>
 </head>
 <body>
@@ -586,7 +657,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapSlug:""};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, hidden:{}, icons:{}};
 const $ = (id) => document.getElementById(id);
 
 function sortValue(text) {
@@ -683,34 +754,145 @@ function build() {
   const mapView = document.createElement("div");
   mapView.className = "view";
   mapView.id = "v-map";
-  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div class="mapnote">Карта Лунара открывается своим окном: сайт не даёт встроить её во вкладку, а картинки у них со сроком. Кнопки сверху — их локации.</div></div>`;
+  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div class="tools" id="maplayers"></div><div id="wikimap"></div></div>`;
   main.appendChild(mapView);
-}
-
-async function loadMapBar() {
-  const bar = $("mapbar");
-  if (bar.dataset.ready) return;
-  let maps = [["", "Все карты"], ["severnaya-zona", "Северная зона"], ["yug", "Южная зона"]];
-  try {
-    const rows = await pywebview.api.map_catalog();
-    if (rows && rows.length) maps = rows.map(row => [row.slug, row.title]);
-  } catch (e) {}
-  bar.innerHTML = "";
-  maps.forEach(([slug, title]) => {
+  [
+    ["south-zone", "Южная Зона"],
+    ["north-zone", "Северная Зона"],
+    ["wild-north", "Дикий Север"],
+    ["lyubech", "Любеч-3"],
+    ["labyrinth", "Лабиринт"],
+    ["graveyard", "Могильник"]
+  ].forEach(([slug, title]) => {
     const btn = document.createElement("button");
     btn.textContent = title;
     btn.dataset.slug = slug;
-    btn.onclick = () => openMap(slug);
-    bar.appendChild(btn);
+    btn.onclick = () => openWiki(slug);
+    $("mapbar").appendChild(btn);
   });
-  bar.dataset.ready = "1";
-  document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === (state.mapSlug || "")));
 }
 
-function openMap(slug) {
+function mapViewOf(settings) {
+  const zoom = settings.defaultZoom ?? 3;
+  const minZoom = settings.minZoom ?? 2;
+  const maxZoom = settings.maxZoom ?? 4;
+  const width = settings.width || 2048;
+  const height = settings.height || 2048;
+  const world = 256 * Math.pow(2, zoom);
+  const scale = world / 2 / Math.PI;
+  const shift = -height + world / 2;
+  const east = 180 / Math.PI * ((width - world / 2) / scale);
+  const south = 360 / Math.PI * (Math.atan(Math.exp(shift / scale)) - Math.PI / 4);
+  const mid = 360 / Math.PI * (Math.atan(Math.exp((world / 2 + shift) / 2 / scale)) - Math.PI / 4);
+  return {center: [mid, (-180 + east) / 2], bounds: [[south, -180], [85.05112878, east]], minZoom, maxZoom, zoom};
+}
+
+function drawWiki(pack) {
+  const box = $("wikimap");
+  if (state.wiki) {
+    state.wiki.remove();
+    state.wiki = null;
+  }
+  const view = mapViewOf(pack.settings);
+  const wiki = L.map(box, {
+    minZoom: view.minZoom,
+    maxZoom: view.maxZoom,
+    zoom: view.zoom,
+    center: view.center,
+    maxBounds: view.bounds,
+    maxBoundsViscosity: 1,
+    attributionControl: false
+  });
+  L.tileLayer(pack.settings.tiles + "/{z}-{x}-{y}.jpg", {
+    minZoom: view.minZoom,
+    maxZoom: view.maxZoom,
+    noWrap: true,
+    bounds: view.bounds
+  }).addTo(wiki);
+  state.wiki = wiki;
+  state.pack = pack;
+  state.hidden = {};
+  state.icons = {};
+  const bar = $("maplayers");
+  bar.innerHTML = "";
+  const search = document.createElement("input");
+  search.id = "mapq";
+  search.placeholder = "Поиск метки";
+  search.oninput = paintMarks;
+  bar.appendChild(search);
+  pack.areas.forEach(area => {
+    const button = document.createElement("button");
+    button.textContent = area.title;
+    button.className = "on";
+    button.onclick = () => {
+      state.hidden[area.title] = !state.hidden[area.title];
+      button.classList.toggle("on", !state.hidden[area.title]);
+      paintMarks();
+    };
+    bar.appendChild(button);
+  });
+  pack.groups.forEach(group => {
+    const button = document.createElement("button");
+    button.textContent = group.title;
+    button.className = "on";
+    button.onclick = () => {
+      state.hidden[group.title] = !state.hidden[group.title];
+      button.classList.toggle("on", !state.hidden[group.title]);
+      paintMarks();
+    };
+    bar.appendChild(button);
+  });
+  paintMarks();
+  setTimeout(() => wiki.invalidateSize(), 60);
+}
+
+function markIcon(url) {
+  if (!state.icons[url]) {
+    state.icons[url] = L.icon({iconUrl: url, iconSize: [22, 22], iconAnchor: [11, 11]});
+  }
+  return state.icons[url];
+}
+
+function paintMarks() {
+  if (!state.wiki || !state.pack) return;
+  if (state.marks) state.marks.remove();
+  const query = ($("mapq") ? $("mapq").value : "").trim().toLowerCase();
+  const layer = L.layerGroup();
+  state.pack.areas.forEach(area => {
+    if (state.hidden[area.title]) return;
+    if (query) return;
+    area.polygons.forEach(points => {
+      L.polygon(points, {color: area.border, weight: 1, fillColor: area.fill, fillOpacity: 0.28})
+        .bindTooltip(area.title)
+        .addTo(layer);
+    });
+  });
+  state.pack.groups.forEach(group => {
+    if (state.hidden[group.title]) return;
+    group.types.forEach(type => {
+      type.markers.forEach(mark => {
+        const blob = (group.title + " " + type.title + " " + (mark.text || "")).toLowerCase();
+        if (query && !blob.includes(query)) return;
+        const tip = type.title + (mark.text ? " — " + mark.text : "");
+        const point = type.image
+          ? L.marker([mark.lat, mark.lng], {icon: markIcon(type.image)})
+          : L.circleMarker([mark.lat, mark.lng], {radius: 5, color: type.color, fillColor: type.color, fillOpacity: 0.9, weight: 1});
+        point.bindTooltip(tip);
+        point.on("click", () => navigator.clipboard.writeText(type.title));
+        point.addTo(layer);
+      });
+    });
+  });
+  layer.addTo(state.wiki);
+  state.marks = layer;
+}
+
+async function openWiki(slug) {
   state.mapSlug = slug;
   document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === slug));
-  if (window.pywebview) pywebview.api.open_map(slug);
+  const pack = await pywebview.api.wiki_map(slug);
+  if (!pack || pack.error) return;
+  drawWiki(pack);
 }
 
 function show(key) {
@@ -718,12 +900,12 @@ function show(key) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
   if (key === "map") {
-    loadMapBar().then(() => {
-      if (!state.mapOpened) {
-        state.mapOpened = true;
-        openMap(state.mapSlug || "");
-      }
-    });
+    if (!state.mapOpened) {
+      state.mapOpened = true;
+      openWiki(state.mapSlug || "south-zone");
+    } else if (state.wiki) {
+      setTimeout(() => state.wiki.invalidateSize(), 60);
+    }
   }
 }
 
