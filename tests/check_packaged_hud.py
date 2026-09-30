@@ -10,7 +10,7 @@ from game_window import GameWindow
 
 root = Path(__file__).resolve().parents[1]
 (root / 'build').mkdir(exist_ok=True)
-exe = (root / 'dist/STALZONE-map-overlay.exe').resolve()
+exe = (Path(sys.argv[1]) if len(sys.argv) > 1 else root / 'dist/STALZONE-map-overlay.exe').resolve()
 native = GameWindow(lambda: hwnd[0])
 hwnd = [0]
 report = {}

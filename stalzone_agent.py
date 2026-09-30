@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,6 +33,7 @@ UA = "stalzone-agent/1.0"
 MSK = timezone(timedelta(hours=3))
 HALT = threading.Event()
 WORKERS = 4
+AUCTION_WORKERS = 8
 _LOG_LOCK = threading.Lock()
 _HIST = {}
 _HIST_LOCK = threading.Lock()
@@ -1101,7 +1102,6 @@ def exbo_headers():
 def get_json(url):
     """Один запрос к EXBO. Соединение держится открытым, пауза общая на все потоки."""
     global _NEXT_AT, _GAP
-    last = None
     for attempt in range(2):
         with _PACE:
             wait = _NEXT_AT - time.time()
@@ -1110,26 +1110,36 @@ def get_json(url):
             _NEXT_AT = time.time() + _GAP
         try:
             resp = _client().get(url, headers=exbo_headers())
-            if resp.status_code == 429 and attempt == 0:
-                _reset_client()
-                with _PACE:
-                    _GAP = min(0.45, _GAP + 0.08)
-                time.sleep(1.2)
-                continue
             resp.raise_for_status()
+            data = resp.json()
             with _PACE:
                 _GAP = max(0.08, _GAP * 0.97)
-            return resp.json()
-        except Exception as e:
-            last = e
-            _reset_client()
-            if attempt == 0:
-                with _PACE:
-                    _GAP = min(0.45, _GAP + 0.05)
-                time.sleep(0.4)
-                continue
-            raise
-    raise last
+            return data
+        except httpx.HTTPStatusError as error:
+            failure = error
+            code = error.response.status_code
+            if attempt or not (code in (408, 425, 429) or code >= 500):
+                raise
+            limited = code == 429
+            delay = 1.2 if limited else 0.4
+            if limited:
+                try:
+                    retry_after = float(error.response.headers.get('Retry-After', '0'))
+                    if 0 <= retry_after < float('inf'):
+                        delay = max(delay, retry_after)
+                except ValueError:
+                    pass
+        except httpx.TransportError as error:
+            failure = error
+            if attempt:
+                raise
+            limited, delay = False, 0.4
+        # httpx drops failed connections itself. Closing the shared client here
+        # would abort unrelated requests running in other scan threads.
+        with _PACE:
+            _GAP = min(0.45, _GAP + (0.08 if limited else 0.05))
+        if HALT.wait(delay):
+            raise failure
 
 
 def market_unit(slug):
@@ -1882,14 +1892,13 @@ def buy_targets():
 
 def _buy_one(item):
     slug, name, single, hist_pages, lot_pages = item
+    if HALT.is_set():
+        return []
     try:
         lots = live_lots(slug, pages=lot_pages)
         with _LIVE_LOCK:
             _LIVE[slug] = lots
-        if not lots:
-            hist = get_json(f"{EXBO}/RU/auction/{slug}/history?additional=true&limit=1&offset=0")
-            if not (hist.get("total") or 0):
-                _remember_off(slug)
+        if HALT.is_set() or not lots:
             return []
         if not any(int(lot.get("buyoutPrice") or 0) > 0 for lot in lots):
             return []
@@ -1958,26 +1967,41 @@ def buy_scan(status=None, budget=0, on_update=None):
     done = 0
     if not items or HALT.is_set():
         return []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_buy_one, item) for item in items]
-        for fut in as_completed(futures):
-            if HALT.is_set():
-                break
-            done += 1
-            try:
-                part = fut.result()
-            except Exception:
-                part = []
-            changed = False
-            if isinstance(part, list) and part:
-                deals.extend(_as_buys(part))
-                changed = True
-            if changed or done % 15 == 0 or done == total:
-                shown = fit_budget(deals, budget)
-                if status:
-                    status(f"Выкуп {done}/{total}, в бюджете {len(shown)}")
-                if on_update and (changed or done == total):
-                    on_update(shown, done, total)
+    with ThreadPoolExecutor(max_workers=AUCTION_WORKERS) as pool:
+        remaining = iter(items)
+        pending = set()
+        def fill():
+            while len(pending) < AUCTION_WORKERS and not HALT.is_set():
+                item = next(remaining, None)
+                if item is None:
+                    break
+                pending.add(pool.submit(_buy_one, item))
+        fill()
+        try:
+            while pending and not HALT.is_set():
+                finished, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+                for fut in finished:
+                    if HALT.is_set():
+                        break
+                    done += 1
+                    try:
+                        part = fut.result()
+                    except Exception:
+                        part = []
+                    changed = False
+                    if isinstance(part, list) and part:
+                        deals.extend(_as_buys(part))
+                        changed = True
+                    if changed or done % 15 == 0 or done == total:
+                        shown = fit_budget(deals, budget)
+                        if status:
+                            status(f"Выкуп {done}/{total}, в бюджете {len(shown)}")
+                        if on_update and (changed or done == total):
+                            on_update(shown, done, total)
+                fill()
+        finally:
+            for fut in pending:
+                fut.cancel()
     return fit_budget(deals, budget)
 
 
