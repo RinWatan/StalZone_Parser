@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
-"""STALZONE агент. Прогон Lunar и список выгодного выкупа."""
+"""STALZONE агент. Цены и список предметов только из официальных данных EXBO."""
 import argparse
-import http.client
 import json
-import ssl
 import statistics
 import sys
 import threading
 import time
 import traceback
-import urllib.error
-import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+
+import httpx
 
 
 def app_dir():
@@ -25,6 +23,7 @@ def app_dir():
 
 DIR = app_dir()
 EXBO = "https://eapi.stalzone.com"
+DB_ZIP = "https://codeload.github.com/EXBO-Studio/stalzone-database/zip/refs/heads/main"
 HTML = DIR / "stalzone_agent.html"
 TXT = DIR / "stalzone_agent.txt"
 LOG = DIR / "stalzone_agent.log"
@@ -1011,7 +1010,7 @@ td,th{{border-bottom:1px solid #333;padding:8px 10px;text-align:left;vertical-al
 small{{color:#aaa}}
 </style>
 <h1>STALZONE агент</h1>
-<p>Обновлено {now}. Lunar history. Комиссия 5%. Перед слотом сверь лот в игре.</p>
+<p>Обновлено {now}. Цены EXBO. Комиссия 5%. Перед слотом сверь лот в игре.</p>
 <h2>Слив фарма</h2>
 <table><tr><th>Предмет</th><th>Last</th><th>Мед 30</th><th>Действие</th></tr>
 {''.join(row(r, lambda a: 'hold' if a.startswith('ДЕРЖ') else 'sell') for r in farm)}
@@ -1051,26 +1050,32 @@ small{{color:#aaa}}
 _PACE = threading.Lock()
 _NEXT_AT = 0.0
 _GAP = 0.12
-_TLS = threading.local()
-_SSL = ssl.create_default_context()
+_CLIENT = None
+_CLIENT_LOCK = threading.Lock()
 
 
-def _exbo_conn():
-    conn = getattr(_TLS, "conn", None)
-    if conn is None:
-        conn = http.client.HTTPSConnection("eapi.stalzone.com", timeout=12, context=_SSL)
-        _TLS.conn = conn
-    return conn
-
-
-def _drop_conn():
-    conn = getattr(_TLS, "conn", None)
-    _TLS.conn = None
-    if conn is not None:
+def _reset_client():
+    global _CLIENT
+    with _CLIENT_LOCK:
+        old = _CLIENT
+        _CLIENT = None
+    if old is not None:
         try:
-            conn.close()
+            old.close()
         except Exception:
             pass
+
+
+def _client():
+    global _CLIENT
+    with _CLIENT_LOCK:
+        if _CLIENT is None:
+            _CLIENT = httpx.Client(
+                timeout=httpx.Timeout(12.0, connect=8.0),
+                follow_redirects=True,
+                limits=httpx.Limits(max_connections=8, max_keepalive_connections=8),
+            )
+        return _CLIENT
 
 
 _EXBO = None
@@ -1094,9 +1099,8 @@ def exbo_headers():
 
 
 def get_json(url):
+    """Один запрос к EXBO. Соединение держится открытым, пауза общая на все потоки."""
     global _NEXT_AT, _GAP
-    part = urlsplit(url)
-    path = part.path + (("?" + part.query) if part.query else "")
     last = None
     for attempt in range(2):
         with _PACE:
@@ -1105,28 +1109,20 @@ def get_json(url):
                 time.sleep(wait)
             _NEXT_AT = time.time() + _GAP
         try:
-            if part.netloc != "eapi.stalzone.com":
-                req = urllib.request.Request(url, headers=exbo_headers())
-                with urllib.request.urlopen(req, timeout=12) as r:
-                    return json.load(r)
-            conn = _exbo_conn()
-            conn.request("GET", path, headers=exbo_headers())
-            resp = conn.getresponse()
-            body = resp.read()
-            if resp.status == 429 and attempt == 0:
-                _drop_conn()
+            resp = _client().get(url, headers=exbo_headers())
+            if resp.status_code == 429 and attempt == 0:
+                _reset_client()
                 with _PACE:
                     _GAP = min(0.45, _GAP + 0.08)
                 time.sleep(1.2)
                 continue
-            if resp.status >= 400:
-                raise urllib.error.HTTPError(url, resp.status, resp.reason, hdrs=None, fp=None)
+            resp.raise_for_status()
             with _PACE:
                 _GAP = max(0.08, _GAP * 0.97)
-            return json.loads(body)
+            return resp.json()
         except Exception as e:
             last = e
-            _drop_conn()
+            _reset_client()
             if attempt == 0:
                 with _PACE:
                     _GAP = min(0.45, _GAP + 0.05)
@@ -1318,65 +1314,125 @@ RANK_NAME = {
 RANK_ORDER = {"RANK_LEGEND": 0, "RANK_MASTER": 1, "RANK_VETERAN": 2, "RANK_STALKER": 3, "RANK_NEWBIE": 4, "DEFAULT": 5, "QUEST_ITEM": 6}
 _LISTING = None
 _LISTING_LOCK = threading.Lock()
+_OFF = None
+_OFF_LOCK = threading.Lock()
 
 
 def auction_listing(force=False):
-    """Полный каталог предметов, тот же список, что в разделе аукциона Lunar."""
+    """Каталог из официальной базы предметов EXBO. Сайт не вызывается."""
     global _LISTING
     with _LISTING_LOCK:
         if _LISTING is not None and not force:
             return _LISTING
-    path = DIR / "listing.json"
-    data = None
-    if not force and path.exists() and time.time() - path.stat().st_mtime < 6 * 3600:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = None
-    if data is None:
-        req = urllib.request.Request(
-            "https://lunar-zone.ru/database/STALCRAFT/ru/listing.json",
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.load(r)
-        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    banned = _no_auction()
-    items = []
-    for entry in data:
-        parts = [p for p in (entry.get("data") or "").split("/") if p]
-        if len(parts) < 2:
-            continue
-        slug = Path(parts[-1]).stem
-        if slug in banned or entry.get("color") == "QUEST_ITEM":
-            continue
-        cat = parts[1] if parts[0] == "items" else parts[0]
-        name = ((entry.get("name") or {}).get("lines") or {}).get("ru") or slug
-        items.append({"id": slug, "name": name, "cat": cat, "color": entry.get("color") or "DEFAULT"})
+    items = _load_catalog(force)
+    off = _off_auction()
+    items = [item for item in items if item["id"] not in off]
     with _LISTING_LOCK:
         _LISTING = items
     return items
 
 
-def _no_auction():
-    """Предметы, которые на аукцион выставить нельзя."""
-    path = DIR / "no-auction.json"
-    data = None
-    if path.exists() and time.time() - path.stat().st_mtime < 6 * 3600:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = None
-    if data is None:
-        req = urllib.request.Request(
-            "https://lunar-zone.ru/database/STALCRAFT/ru/no-auction.json",
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+def _load_catalog(force=False):
+    path = DIR / "catalog.json"
+    fresh = path.exists() and time.time() - path.stat().st_mtime < 3 * 86400
+    if fresh and not force:
+        return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        items = _catalog_from_exbo()
+    except Exception:
+        if path.exists():
+            log("База EXBO не скачалась, беру прошлый каталог")
+            return json.loads(path.read_text(encoding="utf-8"))
+        raise
+    path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    return items
+
+
+def _catalog_from_exbo():
+    """Официальная база предметов EXBO. Один архив, дальше три дня из файла."""
+    log("Качаю базу предметов EXBO, около 150 МБ, один раз на три дня")
+    tmp = DIR / "stalzone-database.zip"
+    try:
+        with httpx.Client(timeout=180, follow_redirects=True) as client:
+            with client.stream("GET", DB_ZIP, headers={"User-Agent": UA}) as src:
+                src.raise_for_status()
+                with tmp.open("wb") as dst:
+                    for chunk in src.iter_bytes(1024 * 1024):
+                        dst.write(chunk)
+        return _items_in_zip(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _items_in_zip(path):
+    found = {}
+    with zipfile.ZipFile(path) as zf:
+        for name in zf.namelist():
+            if "/ru/items/" not in name or not name.endswith(".json"):
+                continue
+            stem = Path(name).stem
+            if stem.isdigit():
+                continue
+            data = json.loads(zf.read(name))
+            item_id = data.get("id") or stem
+            if data.get("color") == "QUEST_ITEM":
+                continue
+            parts = name.split("/")
+            try:
+                cat = parts[parts.index("items") + 1]
+            except ValueError:
+                continue
+            title = ((data.get("name") or {}).get("lines") or {}).get("ru") or item_id
+            found[item_id] = {
+                "id": item_id,
+                "name": title,
+                "cat": cat,
+                "color": data.get("color") or "DEFAULT",
+            }
+    items = list(found.values())
+    items.sort(key=lambda item: item["name"].lower())
+    log(f"В базе EXBO {len(items)} предметов")
+    return items
+
+
+def _off_auction():
+    """Предметы, у которых EXBO не показывает ни лотов, ни истории продаж."""
+    now = time.time()
+    fresh = set()
+    for slug, ts in _off_map().items():
+        if now - ts < 14 * 86400:
+            fresh.add(slug)
+    return fresh
+
+
+def _off_map():
+    global _OFF
+    with _OFF_LOCK:
+        if _OFF is None:
+            path = DIR / "not_on_auction.json"
+            _OFF = {}
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        _OFF = {k: float(v) for k, v in raw.items()}
+                    elif isinstance(raw, list):
+                        _OFF = {k: time.time() for k in raw}
+                except Exception:
+                    _OFF = {}
+        return _OFF
+
+
+def _remember_off(slug):
+    global _LISTING
+    book = _off_map()
+    with _OFF_LOCK:
+        book[slug] = time.time()
+        (DIR / "not_on_auction.json").write_text(
+            json.dumps(book, ensure_ascii=False), encoding="utf-8"
         )
-        with urllib.request.urlopen(req, timeout=40) as r:
-            data = json.load(r)
-        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    raw = data.get("items") if isinstance(data, dict) else data
-    return set(raw or [])
+    with _LISTING_LOCK:
+        _LISTING = None
 
 
 def _qname(qlt):
@@ -1411,7 +1467,7 @@ def _left(value):
 
 
 def item_view(slug):
-    """Живые лоты и последние продажи одного предмета, как карточка на Lunar."""
+    """Живые лоты и последние продажи одного предмета с EXBO."""
     lots_raw = []
     offset = 0
     total = None
@@ -1807,8 +1863,9 @@ def buy_targets():
         catalog = []
     if catalog:
         rows = []
+        off = _off_auction()
         for item in catalog:
-            if item["cat"] == "weapon_modules" or item["name"] in ERROR_NAMES or _skip_buy(item["cat"], item["name"], item.get("color")):
+            if item["cat"] == "weapon_modules" or item["name"] in ERROR_NAMES or item["id"] in off or _skip_buy(item["cat"], item["name"], item.get("color")):
                 continue
             art = item["cat"] == "artefact"
             rows.append((item["id"], item["name"], item["cat"] in single_cats, 2 if art else 1, 1))
@@ -1829,6 +1886,11 @@ def _buy_one(item):
         lots = live_lots(slug, pages=lot_pages)
         with _LIVE_LOCK:
             _LIVE[slug] = lots
+        if not lots:
+            hist = get_json(f"{EXBO}/RU/auction/{slug}/history?additional=true&limit=1&offset=0")
+            if not (hist.get("total") or 0):
+                _remember_off(slug)
+            return []
         if not any(int(lot.get("buyoutPrice") or 0) > 0 for lot in lots):
             return []
         return find_flips(market_book(slug, hist_pages), slug, name, allow_single=single)

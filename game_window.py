@@ -17,8 +17,8 @@ def overlay_style(style, interactive):
 
 
 class GameWindow:
-    def __init__(self, root):
-        self.root = root
+    def __init__(self, hwnd_getter):
+        self.hwnd_getter = hwnd_getter
         self.u = ctypes.WinDLL('user32', use_last_error=True)
         self.k = ctypes.WinDLL('kernel32', use_last_error=True)
         self.enum_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
@@ -30,12 +30,15 @@ class GameWindow:
             'GetAncestor': ([w.HWND, w.UINT], w.HWND),
             'GetWindowThreadProcessId': ([w.HWND, ctypes.POINTER(w.DWORD)], w.DWORD),
             'GetClientRect': ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
+            'GetWindowRect': ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
+            'SystemParametersInfoW': ([w.UINT, w.UINT, ctypes.c_void_p, w.UINT], w.BOOL),
             'ClientToScreen': ([w.HWND, ctypes.POINTER(w.POINT)], w.BOOL),
             'GetWindowLongPtrW': ([w.HWND, ctypes.c_int], ctypes.c_ssize_t),
             'SetWindowLongPtrW': ([w.HWND, ctypes.c_int, ctypes.c_ssize_t], ctypes.c_ssize_t),
             'SetLayeredWindowAttributes': ([w.HWND, w.DWORD, w.BYTE, w.DWORD], w.BOOL),
             'ShowWindow': ([w.HWND, ctypes.c_int], w.BOOL),
             'SetForegroundWindow': ([w.HWND], w.BOOL),
+            'MessageBoxW': ([w.HWND, w.LPCWSTR, w.LPCWSTR, w.UINT], ctypes.c_int),
             'SetWindowPos': ([w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
                               ctypes.c_int, ctypes.c_int, w.UINT], w.BOOL),
         }
@@ -48,11 +51,22 @@ class GameWindow:
         self.k.QueryFullProcessImageNameW.restype = w.BOOL
         self.k.CloseHandle.argtypes = [w.HANDLE]
         self.k.CloseHandle.restype = w.BOOL
-        self.root.update_idletasks()
 
     @property
     def hwnd(self):
-        return self.u.GetAncestor(self.root.winfo_id(), 2)
+        return self.u.GetAncestor(self.hwnd_getter(), 2)
+
+    def window_bounds(self):
+        rect = w.RECT()
+        if not self.u.GetWindowRect(self.hwnd, ctypes.byref(rect)):
+            return None
+        return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+
+    def work_area(self):
+        rect = w.RECT()
+        if not self.u.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+            return (0, 0, 1280, 800)
+        return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
 
     def find_game(self):
         found = []
@@ -115,8 +129,10 @@ class GameWindow:
 
     def activate(self):
         self.u.SetForegroundWindow(self.hwnd)
-        self.root.focus_force()
 
     def return_to(self, hwnd):
         if hwnd:
             self.u.SetForegroundWindow(hwnd)
+
+    def notify(self, text):
+        self.u.MessageBoxW(None, text, 'STALZONE — оверлей', 0x40 | 0x40000)
