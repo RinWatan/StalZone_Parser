@@ -155,20 +155,35 @@ class Bridge:
         self.open_slug = None
         self.map_window = None
 
+    def map_catalog(self):
+        fallback = [
+            {"slug": "", "title": "Все карты"},
+            {"slug": "severnaya-zona", "title": "Северная зона"},
+            {"slug": "yug", "title": "Южная зона"},
+            {"slug": "obitel-zaveta", "title": "Обитель «Завета»"},
+            {"slug": "peklo", "title": "Пекло"},
+            {"slug": "kolizey", "title": "Колизей"},
+        ]
+        try:
+            import httpx
+            with httpx.Client(timeout=12) as client:
+                data = client.get("https://lunar-zone.ru/web-api/maps2d").json()
+            rows = [{"slug": "", "title": "Все карты"}]
+            for item in data.get("maps") or []:
+                slug = str(item.get("slug") or "").strip()
+                title = str(item.get("title") or slug).strip()
+                if slug and title:
+                    rows.append({"slug": slug, "title": title})
+            return rows if len(rows) > 1 else fallback
+        except Exception:
+            return fallback
+
     def open_map(self, slug):
+        import re
         slug = str(slug or "").strip()
-        names = {
-            "": "Все карты",
-            "south-zone": "Южная Зона",
-            "north-zone": "Северная Зона",
-            "wild-north": "Дикий Север",
-            "lyubech": "Любеч-3",
-            "labyrinth": "Лабиринт",
-            "graveyard": "Могильник",
-        }
-        if slug not in names:
+        if slug and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", slug):
             return
-        url = "https://stalzone.wiki/maps" + (("/" + slug) if slug else "")
+        url = "https://lunar-zone.ru/maps" + (("/" + slug) if slug else "")
         try:
             import webview
             window = self.map_window
@@ -176,14 +191,14 @@ class Bridge:
                 try:
                     window.load_url(url)
                     window.show()
-                    self.note("Карта: " + names[slug])
+                    self.note("Карта Лунара" + ((" — " + slug) if slug else ""))
                     return
                 except Exception:
                     self.map_window = None
             self.map_window = webview.create_window(
                 "Карта", url, width=1280, height=820, background_color="#0e0c0a"
             )
-            self.note("Карта: " + names[slug])
+            self.note("Карта Лунара" + ((" — " + slug) if slug else ""))
         except Exception as error:
             self.note("Карта не открылась: " + str(error))
 
@@ -668,24 +683,28 @@ function build() {
   const mapView = document.createElement("div");
   mapView.className = "view";
   mapView.id = "v-map";
-  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div class="mapnote">Сайт карты внутри вкладки падает, поэтому она открывается своим окном. Кнопки сверху меняют локацию.</div></div>`;
+  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div class="mapnote">Карта Лунара открывается своим окном: сайт не даёт встроить её во вкладку, а картинки у них со сроком. Кнопки сверху — их локации.</div></div>`;
   main.appendChild(mapView);
-  const maps = [
-    ["", "Все карты"],
-    ["south-zone", "Южная Зона"],
-    ["north-zone", "Северная Зона"],
-    ["wild-north", "Дикий Север"],
-    ["lyubech", "Любеч-3"],
-    ["labyrinth", "Лабиринт"],
-    ["graveyard", "Могильник"]
-  ];
+}
+
+async function loadMapBar() {
+  const bar = $("mapbar");
+  if (bar.dataset.ready) return;
+  let maps = [["", "Все карты"], ["severnaya-zona", "Северная зона"], ["yug", "Южная зона"]];
+  try {
+    const rows = await pywebview.api.map_catalog();
+    if (rows && rows.length) maps = rows.map(row => [row.slug, row.title]);
+  } catch (e) {}
+  bar.innerHTML = "";
   maps.forEach(([slug, title]) => {
     const btn = document.createElement("button");
     btn.textContent = title;
     btn.dataset.slug = slug;
     btn.onclick = () => openMap(slug);
-    $("mapbar").appendChild(btn);
+    bar.appendChild(btn);
   });
+  bar.dataset.ready = "1";
+  document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === (state.mapSlug || "")));
 }
 
 function openMap(slug) {
@@ -698,9 +717,13 @@ function show(key) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
-  if (key === "map" && !state.mapOpened) {
-    state.mapOpened = true;
-    openMap(state.mapSlug || "");
+  if (key === "map") {
+    loadMapBar().then(() => {
+      if (!state.mapOpened) {
+        state.mapOpened = true;
+        openMap(state.mapSlug || "");
+      }
+    });
   }
 }
 
