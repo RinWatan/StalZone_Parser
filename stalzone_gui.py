@@ -157,6 +157,7 @@ class Bridge:
         self._hud = None
         self._compact = []
         self._launch_lock = threading.Lock()
+        self._search_lock = threading.Lock()
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -430,6 +431,29 @@ class Bridge:
         agent.HALT.set()
         self.note("Стоп")
         return {"ok": True}
+
+    def game_search(self, name):
+        name = " ".join(str(name or "").split())
+        if len(name) < 2 or name.startswith("Прогон найдёт"):
+            return {"ok": False}
+        if not self._search_lock.acquire(blocking=False):
+            return {"ok": False, "error": "Уже ввожу в поиск"}
+        threading.Thread(target=self._game_search, args=(name,), daemon=True).start()
+        return {"ok": True}
+
+    def _game_search(self, name):
+        try:
+            self.note("Вбиваю в аукцион: " + name)
+            if self._hud:
+                self._hud.command("passive")
+            time.sleep(0.45)
+            from stalzone_game_search import search_item
+            error = search_item(agent.DIR / "screen_slots.json", name)
+            self.note(error or ("В поиске: " + name))
+        except Exception as error:
+            self.note("Поиск в игре не сработал: " + str(error))
+        finally:
+            self._search_lock.release()
 
     def start_live(self, budget):
         with self._launch_lock:
@@ -794,7 +818,7 @@ function paint(key) {
     state.sort[key] = {i, desc: prev && prev.i === i ? !prev.desc : true};
     paint(key);
   });
-  box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => navigator.clipboard.writeText(tr.cells[0].textContent));
+  box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => pywebview.api.game_search(tr.cells[0].textContent));
 }
 
 function build() {
@@ -1198,6 +1222,10 @@ async function tick() {
     (hud.game ? "" : " · окно игры не найдено");
   $("deals").innerHTML = (data.compact || []).map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td></tr>`).join("") ||
     '<tr><td colspan="3">Прогон найдёт подходящие лоты</td></tr>';
+  $("deals").querySelectorAll("tr").forEach(tr => {
+    const name = tr.cells[0] ? tr.cells[0].textContent : "";
+    if (name && tr.cells.length > 1) tr.onclick = () => pywebview.api.game_search(name);
+  });
   if (changed && full && state.wiki) setTimeout(() => state.wiki.invalidateSize(), 100);
   if (data.rev !== state.rev) {
     state.rev = data.rev;
