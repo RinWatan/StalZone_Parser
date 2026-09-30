@@ -1696,38 +1696,37 @@ def find_flips(book, slug, name, allow_single=False):
             continue
         exit_hist = statistics.median([u for u, _t in recent[:6]])
         rows.sort()
-        i = 0
-        while i < len(rows):
-            unit, buy = rows[i]
-            j = i + 1
-            while j < len(rows) and rows[j][1] == buy:
-                j += 1
-            nxt = rows[j][0] if j < len(rows) else None
-            sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
-            net_u = sell_at * COMM - unit
-            if net_u <= 0 or unit > sell_at * 0.92 or net_u / unit < 0.06:
-                i = j
-                continue
-            copies = min(j - i, max(1, int(per_h * 1.5)))
-            qlt_i = None
-            qlt_name = ""
-            ptn_s = ""
-            if isinstance(key, tuple) and key and key[0] != "mod":
-                qlt_i = int(key[0])
-                qlt_name = QLT[qlt_i] if 0 <= qlt_i < len(QLT) else str(qlt_i)
-                ptn_s = f"+{int(key[1])}"
-                label = name
-            elif isinstance(key, tuple) and key and key[0] == "mod":
-                label = f"{name} {module_name(key)}"
-            else:
-                label = name
-            deals.append({
-                "name": label, "slug": slug, "amount": amt, "buyout": buy,
-                "unit": unit, "med": sell_at, "net_u": net_u, "profit": net_u * amt,
-                "roi": net_u / unit, "count": copies, "per_h": per_h,
-                "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
-            })
-            i = j
+        # Only clearing the cheapest tier can expose the next asking price.
+        unit, buy = rows[0]
+        j = 1
+        while j < len(rows) and rows[j][1] == buy:
+            j += 1
+        nxt = rows[j][0] if j < len(rows) else None
+        sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
+        net_u = sell_at * COMM - unit
+        if net_u <= 0 or unit > sell_at * 0.92 or net_u / unit < 0.06:
+            continue
+        copies = j
+        if copies > max(1, int(per_h * 1.5)):
+            continue
+        qlt_i = None
+        qlt_name = ""
+        ptn_s = ""
+        if isinstance(key, tuple) and key and key[0] != "mod":
+            qlt_i = int(key[0])
+            qlt_name = QLT[qlt_i] if 0 <= qlt_i < len(QLT) else str(qlt_i)
+            ptn_s = f"+{int(key[1])}"
+            label = name
+        elif isinstance(key, tuple) and key and key[0] == "mod":
+            label = f"{name} {module_name(key)}"
+        else:
+            label = name
+        deals.append({
+            "name": label, "slug": slug, "amount": amt, "buyout": buy,
+            "unit": unit, "med": sell_at, "net_u": net_u, "profit": net_u * amt,
+            "roi": net_u / unit, "count": copies, "required_copies": copies, "per_h": per_h,
+            "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
+        })
     deals.sort(key=lambda r: r["profit"] * r["count"], reverse=True)
     return deals[:3]
 
@@ -1940,7 +1939,7 @@ def fit_budget(deals, budget):
         if price <= 0 or price > left:
             continue
         copies = min(int(row.get("copies") or 1), left // price)
-        if copies <= 0:
+        if copies <= 0 or copies < int(row.get("required_copies") or 1):
             continue
         item = dict(row)
         item["copies"] = copies

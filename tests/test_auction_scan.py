@@ -37,6 +37,9 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(len(result),1)
         self.assertEqual(result[0]['profit'],(100*a.COMM-70)*10)
         self.assertEqual(result[0]['count'],3)
+        buys=a._as_buys(result)
+        self.assertEqual(a.fit_budget(buys,1400),[])
+        self.assertEqual(a.fit_budget(buys,2100)[0]['copies'],3)
     def test_stop_cancels_queued_items(self):
         seen=[]; lock=threading.Lock()
         def process(item):
@@ -49,6 +52,32 @@ class ScanTests(unittest.TestCase):
         with patch.object(a,'buy_targets',return_value=items),patch.object(a,'_buy_one',side_effect=process):
             a.buy_scan()
         self.assertLessEqual(len(seen),8)
+
+    def test_leech_does_not_skip_cheaper_competing_offers(self):
+        now=time.time()
+        prices=[75000,77777,77777,80000,89000,90000,100000,810520]
+        a._LIVE['leech']=[{'amount':1,'buyoutPrice':p,'additional':{'qlt':4}} for p in prices]
+        sales=[(1,p,now-i*600) for i,p in enumerate([4000000,75000,4000000,50000,4966000,70000])]
+        self.assertEqual(a.find_flips({'sales':{(4,0):sales}},'leech','Leech',True),[])
+
+    def test_cannot_raise_price_when_equal_price_lots_remain(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':10,'buyoutPrice':700,'additional':{}}]*20
+        sales=[(10,100,now-i*3600) for i in range(8)]
+        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test'),[])
+
+    def test_recommends_only_cheapest_profitable_tier(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':10,'buyoutPrice':p,'additional':{}} for p in [500,800,1000]]
+        sales=[(10,150,now-i*600) for i in range(8)]
+        result=a.find_flips({'sales':{None:sales}},'abc','Test')
+        self.assertEqual([r['buyout'] for r in result],[500])
+        self.assertEqual(result[0]['med'],80)
+
+    def test_budget_must_cover_all_lots_required_to_clear_price(self):
+        row={'buyout':700,'copies':3,'required_copies':3,'profit':250,'gain':750}
+        self.assertEqual(a.fit_budget([row],1400),[])
+        self.assertEqual(a.fit_budget([row],2100)[0]['copies'],3)
 
 class RetryTests(unittest.TestCase):
     def setUp(self):
