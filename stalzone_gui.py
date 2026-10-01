@@ -22,7 +22,7 @@ SECTIONS = [
     ("Протоартефакты", "protos"),
 ]
 TABLES = {
-    "buys": ["Предмет", "Редкость", "Точка", "Лоты", "Цена лота", "За штуку", "Продашь", "Сумма пачки", "Прибыль", "В час", "Решение"],
+    "buys": ["Предмет", "Редкость", "Точка", "Лоты", "Купить за", "Выставить пачку", "После 5%", "Плюс", "В час", "Если купить сейчас"],
     "farm": ["Предмет", "Продают", "Продавать от", "Пачка", "Решение"],
     "arsenal": ["Предмет", "Продают", "Продавать от", "Решение"],
     "shelter_buy": ["Предмет", "Продают", "Выкуп", "Решение"],
@@ -89,9 +89,10 @@ def rows_from(data):
             buys.append({
                 "cells": [
                     r["name"], r.get("qlt") or "—", r.get("ptn") or "—",
-                    f"{r['copies']} x {r['amount']}", money(r["buyout"]), f"{r['unit']:.0f}",
-                    f"{r['med']:.0f}", money(r["med"] * r["amount"]), money(r["gain"]),
-                    f"{r.get('per_h', 0):.1f}", "ВЫКУПИТЬ",
+                    f"{r['copies']} x {r['amount']}", money(r["buyout"]),
+                    money(r["med"] * r["amount"]), money(r["med"] * r["amount"] * agent.COMM),
+                    money(r["gain"]), f"{r.get('per_h', 0):.1f}",
+                    r.get("plan") or "ВЫКУПИТЬ",
                 ],
                 "tag": tag,
             })
@@ -396,7 +397,7 @@ class Bridge:
             self.tables.update(fresh)
             if 'buys' in data:
                 deals = sorted(data.get('buys') or [], key=lambda r: r.get('gain', 0), reverse=True)
-                self._compact = [{'name': r['name'], 'price': money(r['buyout']),
+                self._compact = [{'name': r['name'], 'price': r.get('plan') or money(r['buyout']),
                                   'gain': money(r['gain']), 'copies': r['copies']}
                                  for r in deals[:5]]
             self.rev += 1
@@ -791,7 +792,7 @@ PAGE = r"""<!DOCTYPE html>
 </header>
 <div id="status" role="status">ожидание</div>
 <div id="compact">
-  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Лот</th><th>Прибыль</th></tr></thead><tbody id="deals"></tbody></table></div>
+  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th></tr></thead><tbody id="deals"></tbody></table></div>
   <div class="compact-actions">
     <button class="gold" id="quickrun">Прогон</button>
     <button class="stop" id="quickstop" disabled>Стоп</button>

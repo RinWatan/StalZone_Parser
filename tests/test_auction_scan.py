@@ -11,7 +11,7 @@ class ScanTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.dir_patch=patch.object(a,'DIR',Path(self.temp.name)); self.dir_patch.start()
-        a.HALT.clear(); a._LIVE.clear(); a._BOOK.clear()
+        a.HALT.clear(); a._LIVE.clear(); a._BOOK.clear(); a._QUIET=None; a._OFF=None; a._SELL=None
         self.item=('abc','Test item',False,1,1)
     def tearDown(self):
         a.HALT.clear(); a._LIVE.clear(); a._BOOK.clear()
@@ -84,6 +84,38 @@ class ScanTests(unittest.TestCase):
         row={'buyout':700,'copies':3,'required_copies':3,'profit':250,'gain':750}
         self.assertEqual(a.fit_budget([row],1400),[])
         self.assertEqual(a.fit_budget([row],2100)[0]['copies'],3)
+
+    def test_spike_sales_do_not_invent_a_resale_price(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':1,'buyoutPrice':200000,'additional':{}}]
+        sales=[(1,p,now-i*600) for i,p in enumerate([4000000,75000,4000000,50000,4966000,70000,60000,80000])]
+        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test',True),[])
+
+    def test_normal_sales_show_buy_then_resell_profit(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':1,'buyoutPrice':50000,'additional':{}}]
+        sales=[(1,80000,now-i*600) for i in range(8)]
+        result=a.find_flips({'sales':{None:sales}},'abc','Test',True)
+        self.assertEqual(len(result),1)
+        bought=a._as_buys(result)[0]
+        self.assertIn('Купи 1 по 50000', bought['plan'])
+        self.assertIn('Плюс', bought['plan'])
+        self.assertGreater(bought['gain'], 0)
+        self.assertGreater(bought['med'] * a.COMM, bought['unit'])
+
+    def test_old_sales_listed_first_still_count_the_newest(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':10,'buyoutPrice':500,'additional':{}}]
+        sales=[(10,150,now-3600*(8-i)) for i in range(8)]
+        result=a.find_flips({'sales':{None:sales}},'abc','Test')
+        self.assertEqual(len(result),1)
+
+    def test_dear_lots_skip_history(self):
+        a._SELL={'abc|10|None': {'sell': 100, 'ts': time.time()}}
+        lots=[{'amount':10,'buyoutPrice':980,'additional':{}}]
+        with patch.object(a,'live_lots',return_value=lots), patch.object(a,'market_book') as book:
+            self.assertEqual(a._buy_one(self.item),[])
+            book.assert_not_called()
 
 class RetryTests(unittest.TestCase):
     def setUp(self):

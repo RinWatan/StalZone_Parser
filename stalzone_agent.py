@@ -1331,6 +1331,9 @@ _OFF_LOCK = threading.Lock()
 _QUIET = None
 _QUIET_LOCK = threading.Lock()
 QUIET_FOR = 30 * 60
+_SELL = None
+_SELL_LOCK = threading.Lock()
+SELL_FOR = 20 * 60
 
 
 def auction_listing(force=False):
@@ -1486,6 +1489,79 @@ def _remember_quiet(slug):
             pass
 
 
+def _sell_map():
+    global _SELL
+    with _SELL_LOCK:
+        if _SELL is None:
+            path = DIR / "sell_cache.json"
+            _SELL = {}
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        _SELL = raw
+                except Exception:
+                    _SELL = {}
+        return _SELL
+
+
+def _sell_id(slug, key, amount):
+    return f"{slug}|{amount}|{key}"
+
+
+def _still_dear(slug, lots):
+    """Историю не качаем, если даже прошлая обычная цена не даёт запаса."""
+    book = _sell_map()
+    now = time.time()
+    groups = {}
+    for lot in lots:
+        buy = int(lot.get("buyoutPrice") or 0)
+        amt = int(lot.get("amount") or 0)
+        if buy <= 0 or amt <= 0:
+            continue
+        groups.setdefault(_sell_id(slug, side_key(lot.get("additional")), amt), []).append(buy / amt)
+    if not groups:
+        return False
+    with _SELL_LOCK:
+        for sid, units in groups.items():
+            hit = book.get(sid) or {}
+            sell = hit.get("sell")
+            ts = hit.get("ts") or 0
+            if not sell or now - ts > SELL_FOR or min(units) <= sell * 0.92:
+                return False
+    return True
+
+
+def _note_exits(slug, book):
+    now = time.time()
+    store = _sell_map()
+    with _SELL_LOCK:
+        for key, rows in (book.get("sales") or {}).items():
+            by_amount = {}
+            for row in rows:
+                if len(row) < 3:
+                    continue
+                by_amount.setdefault(row[0], []).append((row[1], row[2]))
+            for amount, samples in by_amount.items():
+                got = _fair_exit(samples, now, 4 if key is not None else 6)
+                if not got:
+                    continue
+                store[_sell_id(slug, key, amount)] = {"sell": got[0], "ts": now}
+
+
+def flush_sells():
+    book = _sell_map()
+    now = time.time()
+    with _SELL_LOCK:
+        fresh = {key: row for key, row in book.items() if now - (row.get("ts") or 0) <= SELL_FOR}
+        book.clear()
+        book.update(fresh)
+        try:
+            (DIR / "sell_cache.json").write_text(json.dumps(book), encoding="utf-8")
+        except OSError:
+            pass
+
+
 def _qname(qlt):
     if qlt is None:
         return "—"
@@ -1585,10 +1661,10 @@ def write_buys(rows):
             f"<td>{r['buyout']:,}</td><td>{r['unit']:.0f}</td><td>{r['med']:.0f}</td>"
             f"<td>{r['gain']:,.0f}</td><td>{r['roi'] * 100:.0f}%</td><td>{r['spend']:,}</td></tr>".replace(",", " ")
         )
-        lines.append(
+        lines.append(r.get("plan") or (
             f"{r['name']}: выкупить {r['copies']} лот(ов) по {r['buyout']} "
             f"за {r['amount']} шт ({r['unit']:.0f}/шт, рынок {r['med']:.0f}) прибыль ~{r['gain']:.0f}"
-        )
+        ))
     html = f"""<!doctype html><meta charset="utf-8"><title>Выкуп {now}</title>
 <style>body{{font:15px/1.4 sans-serif;background:#111;color:#eee;margin:24px}}
 table{{border-collapse:collapse;width:100%;max-width:980px}}
@@ -1704,10 +1780,30 @@ def drop_market(slug):
         _LIVE.pop(slug, None)
 
 
+def _fair_exit(samples, now, need):
+    """Обычная цена без разовых многомиллионных сделок. Продажи идут от новых к старым."""
+    recent = [row for row in samples if now - row[1] <= 12 * 3600]
+    if len(recent) < need:
+        return None
+    recent.sort(key=lambda row: row[1], reverse=True)
+    if now - recent[0][1] > 2 * 3600:
+        return None
+    span = max(now - recent[-1][1], 20 * 60)
+    per_h = len(recent) / (span / 3600)
+    units = [row[0] for row in recent[:12]]
+    ordered = sorted(units)
+    base = statistics.median(ordered[: max(1, len(ordered) // 2)])
+    if base <= 0:
+        return None
+    kept = [unit for unit in units if unit <= base * 2.5]
+    if len(kept) < need:
+        return None
+    return statistics.median(kept), per_h
+
+
 def find_flips(book, slug, name, allow_single=False):
     """Лот выгоден, только если его реально покупают прямо сейчас и после комиссии есть запас."""
     now = time.time()
-    window = 12 * 3600
     offers = {}
     for lot in cached_live(slug):
         buy = int(lot.get("buyoutPrice") or 0)
@@ -1722,20 +1818,16 @@ def find_flips(book, slug, name, allow_single=False):
     deals = []
     for (key, amt), rows in offers.items():
         hist = []
+        need = 4 if key is not None else 6
         for row in book["sales"].get(key) or []:
             if row[0] != amt:
                 continue
             ts = row[2] if len(row) > 2 else now
             hist.append((row[1], ts))
-        recent = [h for h in hist if now - h[1] <= window]
-        need = 4 if key is not None else 6
-        if len(recent) < need or now - recent[0][1] > 2 * 3600:
+        got = _fair_exit(hist, now, need)
+        if not got or got[1] < 0.5:
             continue
-        span = max(now - recent[-1][1], 20 * 60)
-        per_h = len(recent) / (span / 3600)
-        if per_h < 0.5:
-            continue
-        exit_hist = statistics.median([u for u, _t in recent[:6]])
+        exit_hist, per_h = got
         rows.sort()
         # Only clearing the cheapest tier can expose the next asking price.
         unit, buy = rows[0]
@@ -1944,7 +2036,11 @@ def _buy_one(item):
             return []
         if not any(int(lot.get("buyoutPrice") or 0) > 0 for lot in lots):
             return []
-        return find_flips(market_book(slug, hist_pages), slug, name, allow_single=single)
+        if _still_dear(slug, lots):
+            return []
+        book = market_book(slug, hist_pages)
+        _note_exits(slug, book)
+        return find_flips(book, slug, name, allow_single=single)
     except Exception as e:
         log(f"{name}: {e}")
         return []
@@ -1988,6 +2084,7 @@ def fit_budget(deals, budget):
         item["copies"] = copies
         item["spend"] = copies * price
         item["gain"] = copies * (row.get("profit") or 0)
+        item["plan"] = _plan(item)
         chosen.append(item)
         left -= item["spend"]
         if len(chosen) >= 40:
@@ -2044,6 +2141,7 @@ def buy_scan(status=None, budget=0, on_update=None):
         finally:
             for fut in pending:
                 fut.cancel()
+            flush_sells()
     return fit_budget(deals, budget)
 
 
@@ -2055,6 +2153,20 @@ def _flip_arts(item):
         return []
 
 
+def _plan(item):
+    if "med" not in item or "amount" not in item:
+        return item.get("plan") or ""
+    copies = int(item.get("copies") or item.get("count") or 1)
+    buy = int(item["buyout"])
+    ask = float(item["med"]) * int(item["amount"])
+    hand = ask * COMM
+    gain = float(item.get("gain") or 0)
+    return (
+        f"Купи {copies} по {buy}. Выстави пачку за {ask:.0f}. "
+        f"После 5% придёт {hand:.0f}. Плюс {gain:.0f}"
+    )
+
+
 def _as_buys(deals):
     found = []
     for deal in deals:
@@ -2062,6 +2174,7 @@ def _as_buys(deals):
         item["copies"] = item["count"]
         item["spend"] = item["copies"] * item["buyout"]
         item["gain"] = item["copies"] * item["profit"]
+        item["plan"] = _plan(item)
         found.append(item)
     return found
 

@@ -11,6 +11,7 @@ __pycache__/
 catalog.json
 not_on_auction.json
 quiet_lots.json
+sell_cache.json
 wiki_marks.json
 buy_now.html
 buy_now.txt
