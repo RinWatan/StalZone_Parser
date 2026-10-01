@@ -2011,21 +2011,26 @@ def buy_targets():
         log(f"каталог аукциона: {e}")
         catalog = []
     if catalog:
-        rows = []
+        arts, rest = [], []
         off = _off_auction()
         quiet = quiet_lots()
         for item in catalog:
             if item["cat"] == "weapon_modules" or item["name"] in ERROR_NAMES or item["id"] in off or item["id"] in quiet or _skip_buy(item["cat"], item["name"], item.get("color")):
                 continue
-            rows.append((item["id"], item["name"], item["cat"] in single_cats, 1, 1))
-        if PROTO[0] not in {row[0] for row in rows} and PROTO[1] not in ERROR_NAMES:
-            rows.append((PROTO[0], PROTO[1], True, 1, 1))
-        return rows
+            row = (item["id"], item["name"], item["cat"] in single_cats, 1, 1)
+            if item["cat"] == "artefact":
+                arts.append(row)
+            else:
+                rest.append(row)
+        if PROTO[0] not in {row[0] for row in arts} and PROTO[1] not in ERROR_NAMES:
+            arts.insert(0, (PROTO[0], PROTO[1], True, 1, 1))
+        return arts + rest
     seen = {}
-    for slug, name in list(SHELTER_BUY) + list(CONSUMABLES):
-        seen[slug] = (slug, name, False, 1, 1)
     for slug, name in ARTS:
-        seen[slug] = (slug, name, True, 3, 2)
+        seen[slug] = (slug, name, True, 1, 1)
+    for slug, name in list(SHELTER_BUY) + list(CONSUMABLES):
+        if slug not in seen:
+            seen[slug] = (slug, name, False, 1, 1)
     return list(seen.values())
 
 
@@ -2116,7 +2121,6 @@ def buy_scan(status=None, budget=0, on_update=None):
     if status:
         status("Собираю каталог аукциона")
     items = buy_targets()
-    items.sort(key=lambda row: 0 if row[3] > 1 else 1)
     total = len(items)
     if status:
         status(f"Выкуп по всему аукциону: {total} предметов. Таблица будет заполняться по ходу")

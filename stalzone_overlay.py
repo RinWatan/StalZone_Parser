@@ -63,7 +63,8 @@ class GlobalHotkey:
         self.thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
         msg = wintypes.MSG()
         self.user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
-        self.registered = bool(self.user32.RegisterHotKey(None, self.ID, 0x4006, 0x20))
+        # Ctrl+Shift+Pause. Space здесь был прыжком при зажатых Ctrl и Shift.
+        self.registered = bool(self.user32.RegisterHotKey(None, self.ID, 0x4006, 0x13))
         self.ready.set()
         if not self.registered:
             return
@@ -124,7 +125,7 @@ class HudController:
         self.hotkey = GlobalHotkey(lambda: self.command('toggle'))
         # Do not leave a hidden window that cannot be reopened without its hotkey.
         if not self.hotkey.registered:
-            self.native.notify('Ctrl+Shift+Space занята другой программой или копией оверлея. '
+            self.native.notify('Ctrl+Shift+Pause занята другой программой или копией оверлея. '
                                'Закройте предыдущую копию или освободите клавишу и запустите снова.')
             self.stopped.set()
             self.hotkey.close()

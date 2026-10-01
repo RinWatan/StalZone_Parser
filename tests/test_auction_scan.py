@@ -129,6 +129,18 @@ class ScanTests(unittest.TestCase):
         result=a.find_flips({'sales':{None:sales}},'abc','Test')
         self.assertEqual(len(result),1)
 
+    def test_arts_are_queued_before_the_rest(self):
+        catalog=[
+            {'id':'med','name':'Бинт','cat':'medicine','color':'DEFAULT'},
+            {'id':'art','name':'Гребешок','cat':'artefact','color':'DEFAULT'},
+            {'id':'gun','name':'АК','cat':'weapon','color':'RANK_MASTER'},
+        ]
+        with patch.object(a,'auction_listing',return_value=catalog), patch.object(a,'quiet_lots',return_value=set()), patch.object(a,'_off_auction',return_value=set()):
+            ids=[row[0] for row in a.buy_targets()]
+        self.assertEqual(ids[0],'art')
+        self.assertLess(ids.index('art'), ids.index('med'))
+        self.assertLess(ids.index('art'), ids.index('gun'))
+
     def test_dear_lots_skip_history(self):
         a._SELL={'abc|10|None': {'sell': 100, 'ts': time.time()}}
         lots=[{'amount':10,'buyoutPrice':980,'additional':{}}]
