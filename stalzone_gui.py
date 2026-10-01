@@ -296,7 +296,7 @@ class Bridge:
         root = pda.map_root(agent.DIR)
         maps = pda.list_maps(root)
         if not maps:
-            return {"ok": False, "dir": str(root), "maps": [], "error": "Папка ПДА не найдена: " + str(root)}
+            return {"ok": False, "dir": str(root), "maps": [], "error": "Клиент не найден. Проверены Steam, лаунчер EXBO и запущенная игра. Свой путь запиши в map_dir.txt"}
         return {
             "ok": True,
             "dir": str(root),

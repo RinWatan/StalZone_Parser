@@ -4,10 +4,58 @@ from ctypes import wintypes as w
 import os
 
 
+GAME_EXES = ("stalzone.exe", "stalcraft.exe", "stalzonew.exe")
+
+
 def is_game_path(path):
-    path = path.replace('/', '\\').lower()
-    return ('\\runtime\\' in path and
-            path.rsplit('\\', 1)[-1] in ('stalzone.exe', 'stalcraft.exe'))
+    path = path.replace("/", "\\").lower()
+    return "\\runtime\\" in path and path.rsplit("\\", 1)[-1] in GAME_EXES
+
+
+def running_game_exes():
+    """Пути запущенной игры. Пусто, если это не Windows или игра закрыта."""
+    if os.name != "nt":
+        return []
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    enum_type = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user32.EnumWindows.argtypes = [enum_type, w.LPARAM]
+    user32.EnumWindows.restype = w.BOOL
+    user32.IsWindowVisible.argtypes = [w.HWND]
+    user32.IsWindowVisible.restype = w.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user32.GetWindowThreadProcessId.restype = w.DWORD
+    kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    kernel.OpenProcess.restype = w.HANDLE
+    kernel.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)]
+    kernel.QueryFullProcessImageNameW.restype = w.BOOL
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    kernel.CloseHandle.restype = w.BOOL
+    found = []
+
+    @enum_type
+    def visit(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        pid = w.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return True
+        handle = kernel.OpenProcess(0x1000, False, pid.value)
+        if not handle:
+            return True
+        try:
+            buffer = ctypes.create_unicode_buffer(32768)
+            size = w.DWORD(len(buffer))
+            if kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                if is_game_path(buffer.value):
+                    found.append(buffer.value)
+        finally:
+            kernel.CloseHandle(handle)
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found
 
 
 def overlay_style(style, interactive):

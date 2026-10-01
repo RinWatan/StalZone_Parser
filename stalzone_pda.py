@@ -1,26 +1,150 @@
 # -*- coding: utf-8 -*-
 """Карта ПДА из клиента. Куски .ol собираются в png рядом с программой."""
 import hashlib
-import json
+import os
+import re
 import struct
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-DEFAULT_DIR = Path(r"D:\Steam\steamapps\common\STALCRAFT\modassets\assets\pda\global_map")
+from game_window import running_game_exes
+
+PDA_TAIL = Path("modassets") / "assets" / "pda" / "global_map"
 MIP = 2
 XOR = 103
 NULL = 71
 
 
 def map_root(folder):
-    cfg = Path(folder) / "map_dir.txt"
-    if cfg.exists():
-        text = cfg.read_text(encoding="utf-8").strip().strip('"')
-        if text:
-            return Path(text)
-    return DEFAULT_DIR
+    found = locate(folder)
+    return found or Path(folder) / "pda-not-found"
+
+
+def locate(folder):
+    folder = Path(folder)
+    for start in _starts(folder):
+        found = pda_folder(start)
+        if found:
+            _remember(folder, found)
+            return found
+    return None
+
+
+def pda_folder(start):
+    """От exe, корня клиента или самой папки кусков до global_map."""
+    current = Path(start)
+    for _ in range(10):
+        if _has_tiles(current):
+            return current
+        nested = current / PDA_TAIL
+        if _has_tiles(nested):
+            return nested
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+def _has_tiles(path):
+    try:
+        return path.is_dir() and any(path.glob("r.*.ol"))
+    except OSError:
+        return False
+
+
+def _starts(folder):
+    override = _text_file(folder / "map_dir.txt")
+    if override:
+        yield Path(override)
+    remembered = _text_file(folder / "pda_root.txt")
+    if remembered:
+        yield Path(remembered)
+    for exe in running_game_exes():
+        yield Path(exe)
+    for library in _steam_libraries():
+        yield library / "steamapps" / "common" / "STALCRAFT"
+        yield library / "steamapps" / "common" / "STALZONE"
+    for env in ("APPDATA", "LOCALAPPDATA"):
+        base = os.environ.get(env)
+        if base:
+            yield Path(base) / "EXBO"
+    yield from _epic_locations()
+
+
+def _remember(folder, found):
+    try:
+        (Path(folder) / "pda_root.txt").write_text(str(found), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _text_file(path):
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip().strip('"')
+    except OSError:
+        return ""
+
+
+def _steam_libraries():
+    roots = []
+    for steam in _steam_installs():
+        roots.append(steam)
+        vdf = steam / "steamapps" / "libraryfolders.vdf"
+        if not vdf.exists():
+            continue
+        try:
+            text = vdf.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for raw in re.findall(r'"path"\s+"([^"]+)"', text):
+            roots.append(Path(raw.replace("\\\\", "\\")))
+    return roots
+
+
+def _steam_installs():
+    found = []
+    if os.name == "nt":
+        import winreg
+        for hive, key in (
+            (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"),
+        ):
+            try:
+                with winreg.OpenKey(hive, key) as handle:
+                    value, _ = winreg.QueryValueEx(handle, "SteamPath")
+            except OSError:
+                continue
+            if value:
+                found.append(Path(value))
+    for env in ("ProgramFiles(x86)", "ProgramFiles"):
+        base = os.environ.get(env)
+        if base:
+            found.append(Path(base) / "Steam")
+    return found
+
+
+def _epic_locations():
+    program_data = os.environ.get("PROGRAMDATA")
+    if not program_data:
+        return
+    manifests = Path(program_data) / "Epic" / "EpicGamesLauncher" / "Data" / "Manifests"
+    if not manifests.is_dir():
+        return
+    for item in manifests.glob("*.item"):
+        try:
+            text = item.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "stalcraft" not in text.lower() and "stalzone" not in text.lower():
+            continue
+        match = re.search(r'"InstallLocation"\s*:\s*"([^"]+)"', text)
+        if match:
+            yield Path(match.group(1).replace("\\\\", "\\"))
 
 
 def list_maps(root):

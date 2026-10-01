@@ -5,6 +5,7 @@ from game_window import is_game_path, overlay_style
 class NativePolicyTests(unittest.TestCase):
     def test_detects_exbo_game_but_not_parser(self):
         self.assertTrue(is_game_path(r'E:\games\EXBO\runtime\stalcraft\win64\java\bin\stalzone.exe'))
+        self.assertTrue(is_game_path(r'D:\Steam\steamapps\common\STALCRAFT\runtime\stalcraft\win64\stalzonew.exe'))
         self.assertFalse(is_game_path(r'C:\project\dist\STALZONE.exe'))
         self.assertFalse(is_game_path(r'E:\games\EXBO\java\bin\ExboLauncher.exe'))
 
