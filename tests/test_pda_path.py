@@ -22,6 +22,11 @@ class PdaPathTests(unittest.TestCase):
             (launch / "r.1.0.ol").write_bytes(b"x")
             self.assertEqual(pda.pda_folder(root / "EXBO"), launch)
 
+            boys = root / "games" / "EXBO" / "runtime" / "stalcraft" / "modassets" / "assets" / "pda" / "global_map"
+            boys.mkdir(parents=True)
+            (boys / "r.-1.0.ol").write_bytes(b"x")
+            self.assertEqual(pda.pda_folder(root / "games" / "EXBO"), boys)
+
     def test_map_dir_overrides_a_missing_steam_path(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

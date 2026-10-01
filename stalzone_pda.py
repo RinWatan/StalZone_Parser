@@ -11,7 +11,10 @@ from urllib.parse import unquote
 
 from game_window import running_game_exes
 
-PDA_TAIL = Path("modassets") / "assets" / "pda" / "global_map"
+TAILS = (
+    Path("modassets") / "assets" / "pda" / "global_map",
+    Path("runtime") / "stalcraft" / "modassets" / "assets" / "pda" / "global_map",
+)
 MIP = 2
 XOR = 103
 NULL = 71
@@ -38,9 +41,10 @@ def pda_folder(start):
     for _ in range(10):
         if _has_tiles(current):
             return current
-        nested = current / PDA_TAIL
-        if _has_tiles(nested):
-            return nested
+        for tail in TAILS:
+            nested = current / tail
+            if _has_tiles(nested):
+                return nested
         if current.parent == current:
             break
         current = current.parent
@@ -70,6 +74,7 @@ def _starts(folder):
         base = os.environ.get(env)
         if base:
             yield Path(base) / "EXBO"
+    yield from _launcher_roots()
     yield from _epic_locations()
 
 
@@ -126,6 +131,28 @@ def _steam_installs():
         if base:
             found.append(Path(base) / "Steam")
     return found
+
+
+def _launcher_roots():
+    """Лаунчер часто стоит не в AppData, а как E:\\games\\EXBO."""
+    names = (
+        Path("games") / "EXBO",
+        Path("Games") / "EXBO",
+        Path("EXBO"),
+        Path("games") / "STALCRAFT",
+        Path("Games") / "STALCRAFT",
+        Path("Games") / "Stalcraft",
+        Path("VK Play") / "Stalcraft",
+    )
+    for drive in _drives():
+        for name in names:
+            yield drive / name
+
+
+def _drives():
+    if os.name != "nt":
+        return []
+    return [Path(f"{letter}:\\") for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{letter}:\\").exists()]
 
 
 def _epic_locations():
