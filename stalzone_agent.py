@@ -29,6 +29,7 @@ TXT = DIR / "stalzone_agent.txt"
 LOG = DIR / "stalzone_agent.log"
 BUY_HTML = DIR / "buy_now.html"
 COMM = 0.95
+MIN_PLUS = 10_000
 UA = "stalzone-agent/1.0"
 MSK = timezone(timedelta(hours=3))
 HALT = threading.Event()
@@ -1653,7 +1654,7 @@ def item_view(slug):
 
 def write_buys(rows):
     now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    body, lines = [], [f"Выкуп  {now}", "комиссия 5% с продажи. В таблицу, если после неё остаётся хотя бы 6% от вложенных и пачку ещё покупают.", ""]
+    body, lines = [], [f"Выкуп  {now}", "комиссия 5% с продажи. После неё нужно хотя бы 6% и плюс от 10 тысяч. Выше в списке то, что даёт больше рублей в час.", ""]
     if not rows:
         body.append("<tr><td colspan='8'>Сейчас нет лота, который после 5% даст хотя бы 6% и который ещё покупают.</td></tr>")
         lines.append("выкупать нечего")
@@ -2089,8 +2090,9 @@ def _hour_gain(item):
 
 
 def fit_budget(deals, budget):
-    """Сначала то, что приносит больше рублей в час. Тонкий плюс на зависшем лоте уходит вниз."""
-    ranked = sorted(deals, key=lambda r: (_hour_gain(r), r.get("gain") or 0), reverse=True)
+    """Сначала рубли в час. Процент лишь порог, плюс меньше 10 тысяч не берём."""
+    ranked = [row for row in deals if (row.get("gain") or 0) >= MIN_PLUS]
+    ranked.sort(key=lambda r: (_hour_gain(r), r.get("gain") or 0), reverse=True)
     if not budget or budget <= 0:
         return ranked[:40]
     left = int(budget)
