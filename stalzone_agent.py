@@ -1050,7 +1050,7 @@ small{{color:#aaa}}
 
 _PACE = threading.Lock()
 _NEXT_AT = 0.0
-_GAP = 0.12
+_GAP = 0.05
 _CLIENT = None
 _CLIENT_LOCK = threading.Lock()
 
@@ -1104,16 +1104,18 @@ def get_json(url):
     global _NEXT_AT, _GAP
     for attempt in range(2):
         with _PACE:
-            wait = _NEXT_AT - time.time()
-            if wait > 0:
-                time.sleep(wait)
-            _NEXT_AT = time.time() + _GAP
+            now = time.time()
+            slot = max(_NEXT_AT, now)
+            wait = slot - now
+            _NEXT_AT = slot + _GAP
+        if wait > 0:
+            time.sleep(wait)
         try:
             resp = _client().get(url, headers=exbo_headers())
             resp.raise_for_status()
             data = resp.json()
             with _PACE:
-                _GAP = max(0.08, _GAP * 0.97)
+                _GAP = max(0.03, _GAP * 0.85)
             return data
         except httpx.HTTPStatusError as error:
             failure = error
@@ -1121,23 +1123,23 @@ def get_json(url):
             if attempt or not (code in (408, 425, 429) or code >= 500):
                 raise
             limited = code == 429
-            delay = 1.2 if limited else 0.4
+            delay = 0.6 if limited else 0.3
             if limited:
                 try:
-                    retry_after = float(error.response.headers.get('Retry-After', '0'))
-                    if 0 <= retry_after < float('inf'):
-                        delay = max(delay, retry_after)
+                    retry_after = float(error.response.headers.get("Retry-After", "0"))
+                    if 0 <= retry_after < float("inf"):
+                        delay = min(5.0, max(delay, retry_after))
                 except ValueError:
                     pass
         except httpx.TransportError as error:
             failure = error
             if attempt:
                 raise
-            limited, delay = False, 0.4
+            limited, delay = False, 0.3
         # httpx drops failed connections itself. Closing the shared client here
         # would abort unrelated requests running in other scan threads.
         with _PACE:
-            _GAP = min(0.45, _GAP + (0.08 if limited else 0.05))
+            _GAP = min(0.16, _GAP + (0.03 if limited else 0.02))
         if HALT.wait(delay):
             raise failure
 
@@ -1326,6 +1328,9 @@ _LISTING = None
 _LISTING_LOCK = threading.Lock()
 _OFF = None
 _OFF_LOCK = threading.Lock()
+_QUIET = None
+_QUIET_LOCK = threading.Lock()
+QUIET_FOR = 30 * 60
 
 
 def auction_listing(force=False):
@@ -1443,6 +1448,42 @@ def _remember_off(slug):
         )
     with _LISTING_LOCK:
         _LISTING = None
+
+
+def _quiet_map():
+    global _QUIET
+    with _QUIET_LOCK:
+        if _QUIET is None:
+            path = DIR / "quiet_lots.json"
+            _QUIET = {}
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        _QUIET = {k: float(v) for k, v in raw.items()}
+                except Exception:
+                    _QUIET = {}
+        return _QUIET
+
+
+def quiet_lots():
+    """Пустые лоты не трогаем повторно следующие полчаса. История при этом не запрашивается."""
+    now = time.time()
+    return {slug for slug, ts in _quiet_map().items() if now - ts < QUIET_FOR}
+
+
+def _remember_quiet(slug):
+    book = _quiet_map()
+    with _QUIET_LOCK:
+        book[slug] = time.time()
+        now = time.time()
+        fresh = {key: ts for key, ts in book.items() if now - ts < QUIET_FOR}
+        book.clear()
+        book.update(fresh)
+        try:
+            (DIR / "quiet_lots.json").write_text(json.dumps(book), encoding="utf-8")
+        except OSError:
+            pass
 
 
 def _qname(qlt):
@@ -1873,13 +1914,13 @@ def buy_targets():
     if catalog:
         rows = []
         off = _off_auction()
+        quiet = quiet_lots()
         for item in catalog:
-            if item["cat"] == "weapon_modules" or item["name"] in ERROR_NAMES or item["id"] in off or _skip_buy(item["cat"], item["name"], item.get("color")):
+            if item["cat"] == "weapon_modules" or item["name"] in ERROR_NAMES or item["id"] in off or item["id"] in quiet or _skip_buy(item["cat"], item["name"], item.get("color")):
                 continue
-            art = item["cat"] == "artefact"
-            rows.append((item["id"], item["name"], item["cat"] in single_cats, 2 if art else 1, 1))
+            rows.append((item["id"], item["name"], item["cat"] in single_cats, 1, 1))
         if PROTO[0] not in {row[0] for row in rows} and PROTO[1] not in ERROR_NAMES:
-            rows.append((PROTO[0], PROTO[1], True, 3, 2))
+            rows.append((PROTO[0], PROTO[1], True, 1, 1))
         return rows
     seen = {}
     for slug, name in list(SHELTER_BUY) + list(CONSUMABLES):
@@ -1898,6 +1939,8 @@ def _buy_one(item):
         with _LIVE_LOCK:
             _LIVE[slug] = lots
         if HALT.is_set() or not lots:
+            if not lots and not HALT.is_set():
+                _remember_quiet(slug)
             return []
         if not any(int(lot.get("buyoutPrice") or 0) > 0 for lot in lots):
             return []
@@ -1954,7 +1997,7 @@ def fit_budget(deals, budget):
 
 def buy_scan(status=None, budget=0, on_update=None):
     global _GAP
-    _GAP = 0.12
+    _GAP = 0.05
     if status:
         status("Собираю каталог аукциона")
     items = buy_targets()

@@ -20,6 +20,12 @@ class ScanTests(unittest.TestCase):
         with patch.object(a,'live_lots',return_value=[]), patch.object(a,'get_json') as get:
             self.assertEqual(a._buy_one(self.item),[])
             get.assert_not_called()
+    def test_empty_lots_are_skipped_on_the_next_scan(self):
+        with patch.object(a,'live_lots',return_value=[]), patch.object(a,'get_json') as get:
+            self.assertEqual(a._buy_one(self.item),[])
+            get.assert_not_called()
+        with patch.object(a,'auction_listing',return_value=[{'id':'abc','name':'Test item','cat':'medicine','color':'DEFAULT'}]):
+            self.assertEqual(a.buy_targets(),[])
     def test_stop_does_not_issue_more_requests(self):
         a.HALT.set()
         with patch.object(a,'live_lots') as lots, patch.object(a,'get_json') as get:
