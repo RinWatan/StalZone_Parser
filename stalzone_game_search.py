@@ -121,18 +121,17 @@ def load_points(path):
     button = cfg.get("search_button")
     if not field or not button:
         return None
-    sort_at = cfg.get("sort_header")
-    return tuple(field), tuple(button), (tuple(sort_at) if sort_at else None)
+    return tuple(field), tuple(button)
 
 
 def search_item(path, name):
-    """Вбивает название, жмёт «Поиск» и дважды «Цена выкупа». Пустая строка — успех."""
+    """Вбивает название и жмёт «Поиск». Пустая строка — успех."""
     if sys.platform != "win32":
         return "Поиск в игре только на Windows"
     points = load_points(path)
     if not points:
         return "Нет координат: рядом с программой положи screen_slots.json с полем поиска и кнопкой"
-    field, button, sort_at = points
+    field, button = points
     _click(*field)
     time.sleep(0.12)
     _click(*field)
@@ -140,10 +139,4 @@ def search_item(path, name):
     _clear_and_type(name)
     time.sleep(0.2)
     _click(*button)
-    time.sleep(0.45)
-    if not sort_at:
-        return "Вбил в поиск, но точка сортировки «Цена выкупа» не отмечена"
-    _click(*sort_at)
-    time.sleep(0.35)
-    _click(*sort_at)
     return ""
