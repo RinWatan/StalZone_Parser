@@ -1053,7 +1053,7 @@ small{{color:#aaa}}
 
 _PACE = threading.Lock()
 _NEXT_AT = 0.0
-_GAP = 0.05
+_GAP = 0.10
 _CLIENT = None
 _CLIENT_LOCK = threading.Lock()
 
@@ -1105,7 +1105,7 @@ def exbo_headers():
 def get_json(url):
     """Один запрос к EXBO. Соединение держится открытым, пауза общая на все потоки."""
     global _NEXT_AT, _GAP
-    for attempt in range(2):
+    for attempt in range(5):
         with _PACE:
             now = time.time()
             slot = max(_NEXT_AT, now)
@@ -1118,15 +1118,15 @@ def get_json(url):
             resp.raise_for_status()
             data = resp.json()
             with _PACE:
-                _GAP = max(0.03, _GAP * 0.85)
+                _GAP = max(0.08, _GAP * 0.98)
             return data
         except httpx.HTTPStatusError as error:
             failure = error
             code = error.response.status_code
-            if attempt or not (code in (408, 425, 429) or code >= 500):
+            if attempt == 4 or not (code in (408, 425, 429) or code >= 500):
                 raise
             limited = code == 429
-            delay = 0.6 if limited else 0.3
+            delay = 0.8 if limited else 0.3
             if limited:
                 try:
                     retry_after = float(error.response.headers.get("Retry-After", "0"))
@@ -1136,13 +1136,16 @@ def get_json(url):
                     pass
         except httpx.TransportError as error:
             failure = error
-            if attempt:
+            if attempt == 4:
                 raise
             limited, delay = False, 0.3
         # httpx drops failed connections itself. Closing the shared client here
         # would abort unrelated requests running in other scan threads.
         with _PACE:
-            _GAP = min(0.16, _GAP + (0.03 if limited else 0.02))
+            if limited:
+                _GAP = min(0.45, max(_GAP * 1.5, _GAP + 0.08))
+            else:
+                _GAP = min(0.45, _GAP + 0.03)
         if HALT.wait(delay):
             raise failure
 
@@ -2053,6 +2056,12 @@ def _buy_one(item):
         book = market_book(slug, hist_pages)
         _note_exits(slug, book)
         return find_flips(book, slug, name, allow_single=single)
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 429:
+            log(f"{name}: лимит запросов, предмет пропущен")
+        else:
+            log(f"{name}: ошибка {error.response.status_code}")
+        return []
     except Exception as e:
         log(f"{name}: {e}")
         return []
@@ -2117,7 +2126,7 @@ def fit_budget(deals, budget):
 
 def buy_scan(status=None, budget=0, on_update=None):
     global _GAP
-    _GAP = 0.05
+    _GAP = 0.10
     if status:
         status("Собираю каталог аукциона")
     items = buy_targets()

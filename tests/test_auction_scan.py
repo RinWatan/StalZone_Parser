@@ -194,6 +194,12 @@ class RetryTests(unittest.TestCase):
             a.get_json(self.url)
             self.assertEqual(client.return_value.get.call_count,2); reset.assert_not_called()
             self.assertGreater(a._GAP,.12)
+    def test_repeated_rate_limit_is_retried(self):
+        with patch.object(a,'_client') as client,patch.object(a,'_reset_client') as reset:
+            client.return_value.get.side_effect=[self.response(429),self.response(429),self.response(429),self.response(200)]
+            self.assertEqual(a.get_json(self.url),{'lots':[]})
+            self.assertEqual(client.return_value.get.call_count,4)
+            reset.assert_not_called()
     def test_stop_during_server_backoff_prevents_retry(self):
         def stop(_):
             a.HALT.set()
