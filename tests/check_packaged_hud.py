@@ -47,13 +47,13 @@ u.PostMessageW.restype = w.BOOL
 u.keybd_event.argtypes = [w.BYTE,w.BYTE,w.DWORD,ctypes.c_size_t]
 
 def free_hotkey():
-    value = bool(u.RegisterHotKey(None,0x535B,0x4006,0x13))
+    value = bool(u.RegisterHotKey(None,0x535B,0x4000,0x79))
     if value: u.UnregisterHotKey(None,0x535B)
     return value
 
 def hotkey():
-    for key in [0x11,0x10,0x13]: u.keybd_event(key,0,0,0)
-    for key in [0x13,0x10,0x11]: u.keybd_event(key,0,2,0)
+    u.keybd_event(0x79,0,0,0)
+    u.keybd_event(0x79,0,2,0)
 
 try:
     deadline = time.monotonic()+30

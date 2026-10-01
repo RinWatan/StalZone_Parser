@@ -817,7 +817,7 @@ PAGE = r"""<!DOCTYPE html>
 <main id="main"></main>
 <div id="log"></div>
 </div>
-<div id="hudhint">Ctrl+Shift+Pause — управление оверлеем</div>
+<div id="hudhint">F10 — управление оверлеем</div>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
@@ -1317,7 +1317,7 @@ async function tick() {
   document.body.classList.toggle("full", full);
   $("expand").textContent = full ? "Свернуть" : "Развернуть";
   $("hudhint").textContent = !hud.hotkey ? "Горячая клавиша занята другой копией — закройте её и перезапустите оверлей" :
-    (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · Ctrl+Shift+Pause — управление") +
+    (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
     (hud.game ? "" : " · окно игры не найдено");
   $("deals").innerHTML = (data.compact || []).map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td></tr>`).join("") ||
     '<tr><td colspan="3">Прогон найдёт подходящие лоты</td></tr>';
