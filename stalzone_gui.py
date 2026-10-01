@@ -155,6 +155,9 @@ class Bridge:
         self.fav = set(self._read_json("auction_fav.json"))
         self.recent = self._read_json("auction_recent.json")
         self.lot_data = None
+        self._stats_lock = threading.Lock()
+        self._item_lock = threading.Lock()
+        self._item_generation = 0
         self.open_slug = None
         self._wiki = {}
         self._hud = None
@@ -645,7 +648,11 @@ class Bridge:
     def open_item(self, slug, name, qname, lo, hi):
         if not slug:
             return {"ok": False, "error": "Выбери предмет слева"}
-        self.open_slug = slug
+        with self._item_lock:
+            self._item_generation += 1
+            generation = self._item_generation
+            self.open_slug = slug
+            self.lot_data = None
         self.recent = [slug] + [x for x in self.recent if x != slug]
         self.recent = self.recent[:30]
         self._write_json("auction_recent.json", self.recent)
@@ -655,8 +662,12 @@ class Bridge:
         except Exception as e:
             self.note(f"Ошибка: {e}")
             return {"ok": False, "error": str(e)}
-        self.lot_data = data
-        return self._lots_payload(name, data, qname, lo, hi)
+        payload = self._lots_payload(name, data, qname, lo, hi)
+        with self._item_lock:
+            if generation != self._item_generation:
+                return {"ok": False, "error": "Выбран другой предмет"}
+            self.lot_data = data
+        return payload
 
     def filter_open(self, qname, lo, hi):
         if not self.lot_data:
@@ -698,7 +709,26 @@ class Bridge:
         if name:
             info = f"{name}: {info}"
             self.note(info)
-        return {"ok": True, "info": info, "lots": lot_rows, "sales": sale_rows}
+        try:
+            with self._stats_lock:
+                stats = agent.auction_price_stats(data, qname, lo, hi)
+            if stats["count"]:
+                summary = (f"Средняя: {money(stats['mean'])} ₽/шт · "
+                           f"Медиана: {money(stats['median'])} ₽/шт · "
+                           f"Сделок: {stats['count']} · До 100 последних продаж за 7 дней")
+                if stats["count"] < 5:
+                    summary += " · Малая выборка"
+                if stats["truncated"]:
+                    summary += " · Неполная история: достигнут предел загрузки"
+            else:
+                summary = "Нет продаж за 7 дней для выбранных фильтров"
+                if stats["truncated"]:
+                    summary = "В загруженной части истории нет продаж для выбранных фильтров · Неполная история"
+        except Exception:
+            stats = None
+            summary = "Статистика недоступна: не удалось загрузить историю"
+        return {"ok": True, "info": info, "lots": lot_rows, "sales": sale_rows,
+                "stats": stats, "summary": summary}
 
 
 PAGE = r"""<!DOCTYPE html>
@@ -821,7 +851,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
 const $ = (id) => document.getElementById(id);
 
 function sortValue(text) {
@@ -905,6 +935,7 @@ function build() {
           <button class="gold" id="open">Открыть</button>
         </div>
         <div id="lotinfo">Каталог грузится при открытии вкладки.</div>
+        <div id="lotstats" style="padding:10px 0;color:var(--gold)" title="Цена продажи делится на количество предметов. Каждая сделка имеет одинаковый вес. Учитываются выбранные редкость и заточка; дорогие выбросы не удаляются автоматически."></div>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
         <div class="sheet" id="lotbox"></div>
       </div>
@@ -1259,15 +1290,28 @@ function lotTable(rows, cols) {
   $("lotbox").innerHTML = `<table><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function auctionLoading(on) {
+  state.itemLoading = on;
+  for (const id of ["lq", "lo", "hi", "open"]) $(id).disabled = on;
+}
+
 async function openItem() {
   if (!selected) return;
+  const request = ++state.detailRequest;
+  auctionLoading(true);
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
   $("lotinfo").textContent = name + ": читаю лоты…";
-  const data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value);
-  if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; return; }
+  $("lotstats").textContent = "Считаю среднюю и медиану…";
+  let data;
+  try { data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value); }
+  catch (error) { data = {ok:false, error:String(error)}; }
+  if (request !== state.detailRequest) return;
+  auctionLoading(false);
+  if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; $("lotstats").textContent = ""; return; }
   state.lots = data.lots; state.sales = data.sales;
   $("lotinfo").textContent = data.info;
+  $("lotstats").textContent = data.summary || "";
   showLots();
 }
 
@@ -1292,10 +1336,15 @@ function wire() {
   };
   $("open").onclick = openItem;
   $("lq").onchange = $("lo").onchange = $("hi").onchange = async () => {
+    if (state.itemLoading) return;
+    const request = ++state.detailRequest;
+    $("lotstats").textContent = "Пересчитываю по выбранным фильтрам…";
     const data = await pywebview.api.filter_open($("lq").value, $("lo").value, $("hi").value);
-    if (!data.ok) return;
+    if (request !== state.detailRequest) return;
+    if (!data.ok) { $("lotstats").textContent = ""; return; }
     state.lots = data.lots; state.sales = data.sales;
     if (data.info) $("lotinfo").textContent = data.info;
+    $("lotstats").textContent = data.summary || "";
     showLots();
   };
   $("now").onclick = () => { state.lot = "now"; $("now").classList.add("on"); $("hist").classList.remove("on"); showLots(); };
