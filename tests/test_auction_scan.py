@@ -103,6 +103,25 @@ class ScanTests(unittest.TestCase):
         self.assertGreater(bought['gain'], 0)
         self.assertGreater(bought['med'] * a.COMM, bought['unit'])
 
+    def test_thin_spread_dies_to_commission(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':1,'buyoutPrice':92000,'additional':{}}]
+        sales=[(1,100000,now-i*600) for i in range(8)]
+        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test',True),[])
+
+    def test_spike_sales_do_not_raise_the_buy_count(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':10,'buyoutPrice':500,'additional':{}}]*3
+        sales=[(10,5000,now-i*60) for i in range(6)]
+        sales += [(10,150,now-1800-i*2400) for i in range(6)]
+        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test'),[])
+
+    def test_budget_prefers_rubles_per_hour(self):
+        slow={'buyout':1000,'copies':1,'required_copies':1,'profit':500,'gain':500,'per_h':0.5,'med':2000,'amount':1}
+        fast={'buyout':100,'copies':1,'required_copies':1,'profit':80,'gain':80,'per_h':4,'med':200,'amount':1}
+        self.assertEqual(a.fit_budget([slow, fast], 10000)[0]['buyout'], 100)
+        self.assertGreater(a.fit_budget([slow, fast], 10000)[0]['hour_gain'], 250)
+
     def test_old_sales_listed_first_still_count_the_newest(self):
         now=time.time()
         a._LIVE['abc']=[{'amount':10,'buyoutPrice':500,'additional':{}}]

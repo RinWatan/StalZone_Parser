@@ -710,7 +710,10 @@ def _art_one(item):
             continue
         last, sold, n = got
         net = sold * COMM - bought
-        if bought <= sold * 0.92 and net >= ART_MIN_NET:
+        roi = net / bought if bought else 0
+        samples = [(row[1], row[2]) for row in prices if len(row) > 2]
+        alive = _fair_exit(samples, time.time(), 4)
+        if bought and roi >= 0.06 and net >= ART_MIN_NET and alive and alive[1] >= 0.5:
             liq = "ВЫКУПИТЬ"
         elif bought >= sold * 1.15 and n >= 12:
             liq = "ДОРОГО"
@@ -1650,9 +1653,9 @@ def item_view(slug):
 
 def write_buys(rows):
     now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    body, lines = [], [f"Выкуп  {now}", "комиссия 5%, брать если штука <= 85% обычной продажи", ""]
+    body, lines = [], [f"Выкуп  {now}", "комиссия 5% с продажи. В таблицу, если после неё остаётся хотя бы 6% от вложенных и пачку ещё покупают.", ""]
     if not rows:
-        body.append("<tr><td colspan='8'>Сейчас нет лота, который после комиссии дешевле рынка на 15%.</td></tr>")
+        body.append("<tr><td colspan='8'>Сейчас нет лота, который после 5% даст хотя бы 6% и который ещё покупают.</td></tr>")
         lines.append("выкупать нечего")
     for r in rows:
         body.append(
@@ -1788,16 +1791,20 @@ def _fair_exit(samples, now, need):
     recent.sort(key=lambda row: row[1], reverse=True)
     if now - recent[0][1] > 2 * 3600:
         return None
-    span = max(now - recent[-1][1], 20 * 60)
-    per_h = len(recent) / (span / 3600)
     units = [row[0] for row in recent[:12]]
     ordered = sorted(units)
     base = statistics.median(ordered[: max(1, len(ordered) // 2)])
     if base <= 0:
         return None
-    kept = [unit for unit in units if unit <= base * 2.5]
+    cap = base * 2.5
+    kept = [unit for unit in units if unit <= cap]
     if len(kept) < need:
         return None
+    normal = [row for row in recent if row[0] <= cap]
+    if len(normal) < need or now - normal[0][1] > 2 * 3600:
+        return None
+    span = max(now - normal[-1][1], 20 * 60)
+    per_h = len(normal) / (span / 3600)
     return statistics.median(kept), per_h
 
 
@@ -1837,7 +1844,7 @@ def find_flips(book, slug, name, allow_single=False):
         nxt = rows[j][0] if j < len(rows) else None
         sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
         net_u = sell_at * COMM - unit
-        if net_u <= 0 or unit > sell_at * 0.92 or net_u / unit < 0.06:
+        if net_u <= 0 or net_u / unit < 0.06:
             continue
         copies = j
         if copies > max(1, int(per_h * 1.5)):
@@ -1860,7 +1867,7 @@ def find_flips(book, slug, name, allow_single=False):
             "roi": net_u / unit, "count": copies, "required_copies": copies, "per_h": per_h,
             "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
         })
-    deals.sort(key=lambda r: r["profit"] * r["count"], reverse=True)
+    deals.sort(key=lambda r: ((r["profit"] * r["per_h"]), r["profit"] * r["count"]), reverse=True)
     return deals[:3]
 
 
@@ -2066,9 +2073,19 @@ def parse_money(text):
     return max(0, int(float(raw) * mult))
 
 
+def _hour_gain(item):
+    copies = int(item.get("copies") or item.get("count") or 1)
+    if copies <= 0:
+        return 0.0
+    gain = item.get("gain")
+    if gain is None:
+        gain = float(item.get("profit") or 0) * copies
+    return float(gain) * float(item.get("per_h") or 0) / copies
+
+
 def fit_budget(deals, budget):
-    """Сначала дорогие лоты: у них больше рублёвый плюс. Дешёвые берутся на остаток."""
-    ranked = sorted(deals, key=lambda r: (r.get("gain") or 0, r.get("buyout") or 0), reverse=True)
+    """Сначала то, что приносит больше рублей в час. Тонкий плюс на зависшем лоте уходит вниз."""
+    ranked = sorted(deals, key=lambda r: (_hour_gain(r), r.get("gain") or 0), reverse=True)
     if not budget or budget <= 0:
         return ranked[:40]
     left = int(budget)
@@ -2084,6 +2101,7 @@ def fit_budget(deals, budget):
         item["copies"] = copies
         item["spend"] = copies * price
         item["gain"] = copies * (row.get("profit") or 0)
+        item["hour_gain"] = _hour_gain(item)
         item["plan"] = _plan(item)
         chosen.append(item)
         left -= item["spend"]
@@ -2161,9 +2179,13 @@ def _plan(item):
     ask = float(item["med"]) * int(item["amount"])
     hand = ask * COMM
     gain = float(item.get("gain") or 0)
+    spent = copies * buy
+    roi = gain / spent * 100 if spent else 0
+    hour = _hour_gain(item)
     return (
         f"Купи {copies} по {buy}. Выстави пачку за {ask:.0f}. "
-        f"После 5% придёт {hand:.0f}. Плюс {gain:.0f}"
+        f"После 5% придёт {hand:.0f}. Плюс {gain:.0f} ({roi:.0f}%). "
+        f"Плюс в час {hour:.0f}."
     )
 
 
@@ -2174,6 +2196,7 @@ def _as_buys(deals):
         item["copies"] = item["count"]
         item["spend"] = item["copies"] * item["buyout"]
         item["gain"] = item["copies"] * item["profit"]
+        item["hour_gain"] = _hour_gain(item)
         item["plan"] = _plan(item)
         found.append(item)
     return found
