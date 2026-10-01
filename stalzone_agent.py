@@ -29,7 +29,6 @@ TXT = DIR / "stalzone_agent.txt"
 LOG = DIR / "stalzone_agent.log"
 BUY_HTML = DIR / "buy_now.html"
 COMM = 0.95
-MIN_PLUS = 10_000
 UA = "stalzone-agent/1.0"
 MSK = timezone(timedelta(hours=3))
 HALT = threading.Event()
@@ -1654,7 +1653,7 @@ def item_view(slug):
 
 def write_buys(rows):
     now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    body, lines = [], [f"Выкуп  {now}", "комиссия 5% с продажи. После неё нужно хотя бы 6% и плюс от 10 тысяч. Выше в списке то, что даёт больше рублей в час.", ""]
+    body, lines = [], [f"Выкуп  {now}", "лот дешевле обычной цены. Ставь её: после 5% должен остаться плюс. Выше в списке больший плюс.", ""]
     if not rows:
         body.append("<tr><td colspan='8'>Сейчас нет лота, который после 5% даст хотя бы 6% и который ещё покупают.</td></tr>")
         lines.append("выкупать нечего")
@@ -1845,7 +1844,7 @@ def find_flips(book, slug, name, allow_single=False):
         nxt = rows[j][0] if j < len(rows) else None
         sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
         net_u = sell_at * COMM - unit
-        if net_u <= 0 or net_u / unit < 0.06:
+        if net_u <= 0:
             continue
         copies = j
         if copies > max(1, int(per_h * 1.5)):
@@ -1868,7 +1867,7 @@ def find_flips(book, slug, name, allow_single=False):
             "roi": net_u / unit, "count": copies, "required_copies": copies, "per_h": per_h,
             "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
         })
-    deals.sort(key=lambda r: ((r["profit"] * r["per_h"]), r["profit"] * r["count"]), reverse=True)
+    deals.sort(key=lambda r: (r["profit"] * r["count"], r["profit"] * r["per_h"]), reverse=True)
     return deals[:3]
 
 
@@ -2090,9 +2089,8 @@ def _hour_gain(item):
 
 
 def fit_budget(deals, budget):
-    """Сначала рубли в час. Процент лишь порог, плюс меньше 10 тысяч не берём."""
-    ranked = [row for row in deals if (row.get("gain") or 0) >= MIN_PLUS]
-    ranked.sort(key=lambda r: (_hour_gain(r), r.get("gain") or 0), reverse=True)
+    """Сначала самый большой плюс. Процент сам по себе лот наверх не поднимает."""
+    ranked = sorted(deals, key=lambda r: ((r.get("gain") or 0), _hour_gain(r)), reverse=True)
     if not budget or budget <= 0:
         return ranked[:40]
     left = int(budget)

@@ -45,11 +45,8 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(result[0]['count'],3)
         buys=a._as_buys(result)
         self.assertEqual(buys[0]['gain'], (100*a.COMM-70)*10*3)
-        rich=dict(buys[0])
-        rich['profit']=4000
-        rich['gain']=12000
-        self.assertEqual(a.fit_budget([rich],1400),[])
-        self.assertEqual(a.fit_budget([rich],2100)[0]['copies'],3)
+        self.assertEqual(a.fit_budget(buys,1400),[])
+        self.assertEqual(a.fit_budget(buys,2100)[0]['copies'],3)
     def test_stop_cancels_queued_items(self):
         seen=[]; lock=threading.Lock()
         def process(item):
@@ -85,7 +82,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(result[0]['med'],80)
 
     def test_budget_must_cover_all_lots_required_to_clear_price(self):
-        row={'buyout':700,'copies':3,'required_copies':3,'profit':4000,'gain':12000,'per_h':1,'med':200,'amount':10}
+        row={'buyout':700,'copies':3,'required_copies':3,'profit':250,'gain':750,'per_h':1,'med':200,'amount':10}
         self.assertEqual(a.fit_budget([row],1400),[])
         self.assertEqual(a.fit_budget([row],2100)[0]['copies'],3)
 
@@ -107,11 +104,19 @@ class ScanTests(unittest.TestCase):
         self.assertGreater(bought['gain'], 0)
         self.assertGreater(bought['med'] * a.COMM, bought['unit'])
 
-    def test_thin_spread_dies_to_commission(self):
+    def test_price_under_commission_is_not_a_buy(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':1,'buyoutPrice':96000,'additional':{}}]
+        sales=[(1,100000,now-i*600) for i in range(8)]
+        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test',True),[])
+
+    def test_lot_a_bit_under_the_sale_is_a_buy(self):
         now=time.time()
         a._LIVE['abc']=[{'amount':1,'buyoutPrice':92000,'additional':{}}]
         sales=[(1,100000,now-i*600) for i in range(8)]
-        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test',True),[])
+        result=a.find_flips({'sales':{None:sales}},'abc','Test',True)
+        self.assertEqual(len(result),1)
+        self.assertEqual(result[0]['profit'],100000*a.COMM-92000)
 
     def test_spike_sales_do_not_raise_the_buy_count(self):
         now=time.time()
@@ -120,18 +125,16 @@ class ScanTests(unittest.TestCase):
         sales += [(10,150,now-1800-i*2400) for i in range(6)]
         self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test'),[])
 
-    def test_budget_prefers_rubles_per_hour(self):
+    def test_bigger_plus_outranks_a_high_percent(self):
         slow={'buyout':1000,'copies':1,'required_copies':1,'profit':50000,'gain':50000,'per_h':0.5,'med':2000,'amount':1}
         fast={'buyout':100,'copies':1,'required_copies':1,'profit':20000,'gain':20000,'per_h':4,'med':200,'amount':1}
-        self.assertEqual(a.fit_budget([slow, fast], 100000)[0]['buyout'], 100)
-        self.assertGreater(a.fit_budget([slow, fast], 100000)[0]['hour_gain'], 25000)
+        self.assertEqual(a.fit_budget([slow, fast], 100000)[0]['gain'], 50000)
 
-    def test_high_percent_with_a_thousand_profit_is_not_a_buy(self):
+    def test_high_percent_with_a_thousand_stays_below_real_money(self):
         crumb={'buyout':2000,'copies':1,'required_copies':1,'profit':1000,'gain':1000,'roi':0.5,'per_h':10,'med':3000,'amount':1}
         real={'buyout':200000,'copies':1,'required_copies':1,'profit':20000,'gain':20000,'roi':0.1,'per_h':1,'med':250000,'amount':1}
         picked=a.fit_budget([crumb, real], 500000)
-        self.assertEqual(len(picked),1)
-        self.assertEqual(picked[0]['gain'],20000)
+        self.assertEqual([row['gain'] for row in picked], [20000, 1000])
 
     def test_old_sales_listed_first_still_count_the_newest(self):
         now=time.time()
