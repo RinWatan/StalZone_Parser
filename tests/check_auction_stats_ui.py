@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import webview
 import stalzone_agent as agent
@@ -15,6 +16,7 @@ root=Path(__file__).resolve().parents[1]
 temp=tempfile.TemporaryDirectory()
 agent.DIR=Path(temp.name)
 bridge=gui.Bridge()
+bridge._hud=SimpleNamespace(snapshot=lambda:{'mode':'full','hotkey':True})
 now=datetime.now(timezone.utc).isoformat()
 data={'slug':'test','total':1,
       'lots':[{'qname':agent._qname(4),'qlt':4,'ptn':0,'amount':1,'buyout':80,'unit':80,'start':0,'left':'2ч'}],
@@ -43,6 +45,21 @@ def check():
         report['summary']=summary
         report['above_table']=window.evaluate_js("document.getElementById('lotstats').getBoundingClientRect().bottom <= document.getElementById('lotbox').getBoundingClientRect().top")
         assert report['above_table']
+        assert 'Надёжность:' in summary
+        window.evaluate_js("document.getElementById('huntpanel').open=true; document.getElementById('huntprice').value='100'; document.getElementById('huntsave').click(); null")
+        wait("document.getElementById('huntrules').textContent.includes('Тестовый предмет')")
+        assert len(gui.Bridge().hunts.rules())==1
+        window.evaluate_js("document.getElementById('huntstart').click(); null")
+        report['hunt_signal']=wait("document.getElementById('huntnotice').textContent.includes('80') && document.getElementById('huntnotice').textContent")
+        bridge._hunt_check()
+        assert len(bridge.poll()['hunt']['alerts'])==1
+        window.evaluate_js("document.getElementById('huntstop').click(); null")
+        bridge.worker.join(2)
+        assert not bridge.worker.is_alive()
+        report['hunt_stopped']=True
+        window.evaluate_js("document.getElementById('huntrules').querySelector('button').click(); null")
+        wait("document.getElementById('huntrules').textContent.includes('Нет сохранённых условий')")
+        assert not gui.Bridge().hunts.rules()
         window.evaluate_js("document.getElementById('hist').click(); null")
         assert window.evaluate_js("document.getElementById('lotstats').textContent") == summary
         window.evaluate_js("document.getElementById('lo').value='5'; document.getElementById('hi').value='5'; document.getElementById('lo').onchange(); null")
@@ -51,10 +68,13 @@ def check():
     except Exception as error:
         report['error']=str(error)
     finally:
+        bridge.stop_run()
+        if bridge.worker:
+            bridge.worker.join(2)
         (root/'build/auction_stats_ui.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         window.destroy()
 
-with patch.object(agent,'auction_listing',return_value=[{'id':'test','name':'Тестовый предмет','cat':'artefact','color':'DEFAULT'}]),patch.object(agent,'item_view',return_value=data):
+with patch.object(agent,'auction_listing',return_value=[{'id':'test','name':'Тестовый предмет','cat':'artefact','color':'DEFAULT'}]),patch.object(agent,'item_view',return_value=data),patch.object(agent,'live_lots',return_value=[{'amount':1,'buyoutPrice':80,'additional':{'qlt':4}}]):
     webview.start(check,gui='edgechromium')
 temp.cleanup()
 report=json.loads((root/'build/auction_stats_ui.json').read_text(encoding='utf-8'))

@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import traceback
+from stalzone_trading import confidence
 import zipfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timedelta, timezone
@@ -1651,7 +1652,8 @@ def auction_price_stats(data, qname="Все", lo=0, hi=15):
     units = [unit for _ts, unit in sample]
     return {"mean": statistics.mean(units) if units else None,
             "median": statistics.median(units) if units else None,
-            "count": len(units), "truncated": truncated}
+            "count": len(units), "truncated": truncated,
+            "confidence": confidence([(unit, ts) for ts, unit in sample], now)}
 
 
 def item_view(slug):
@@ -1828,9 +1830,10 @@ def usual_sale(prices):
 
 def _epoch(value):
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.timestamp() if dt.tzinfo is not None else 0
     except Exception:
-        return time.time()
+        return 0
 
 
 def drop_market(slug):
@@ -1925,6 +1928,7 @@ def find_flips(book, slug, name, allow_single=False):
             "unit": unit, "med": sell_at, "net_u": net_u, "profit": net_u * amt,
             "roi": net_u / unit, "count": copies, "required_copies": copies, "per_h": per_h,
             "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
+            "confidence": confidence(hist, now),
         })
     deals.sort(key=lambda r: (r["profit"] * r["count"], r["profit"] * r["per_h"]), reverse=True)
     return deals[:3]

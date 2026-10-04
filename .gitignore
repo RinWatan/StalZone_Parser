@@ -24,3 +24,5 @@ screen_slots.json
 pda_cache/
 map_dir.txt
 pda_root.txt
+price_watch.json
+price_watch.tmp
