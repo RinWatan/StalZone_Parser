@@ -49,9 +49,24 @@ def load(folder, slug):
         "width": int(version.get("width") or 1),
         "height": int(version.get("height") or 1),
         "overview": version.get("overview") or "",
+        "tiles": _tiles(version),
         "titles": saved["titles"],
         "categories": saved["categories"],
         "markers": saved["markers"],
+    }
+
+
+def _tiles(version):
+    grid = {}
+    for key, cells in (version.get("grid") or {}).items():
+        level = str(key)[1:] if str(key).startswith("z") else str(key)
+        grid[level] = cells
+    return {
+        "base": version.get("tileBase") or "",
+        "query": version.get("tileQuery") or "",
+        "size": int(version.get("tileSize") or 512),
+        "zoomMax": int(version.get("zoomMax") or 0),
+        "grid": grid,
     }
 
 

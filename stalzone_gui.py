@@ -1206,18 +1206,22 @@ function drawLunar(pack) {
   }
   const wiki = L.map(box, {
     crs: L.CRS.Simple,
-    minZoom: -3,
-    maxZoom: 2,
+    minZoom: -4,
+    maxZoom: 1,
     attributionControl: false,
     preferCanvas: true,
     zoomSnap: 0.25
   });
+  wiki.createPane("ground");
+  wiki.getPane("ground").style.zIndex = 250;
   const bounds = [[0, 0], [pack.height, pack.width]];
-  if (pack.overview) L.imageOverlay(pack.overview, bounds).addTo(wiki);
+  if (pack.overview) L.imageOverlay(pack.overview, bounds, {pane: "ground"}).addTo(wiki);
   wiki.fitBounds(bounds);
   wiki.setMaxBounds(bounds);
   state.wiki = wiki;
   state.pack = pack;
+  state.ground = {};
+  state.groundLevel = null;
   state.mine = pack.mine || [];
   state.placing = false;
   state.hidden = {};
@@ -1290,9 +1294,58 @@ function drawLunar(pack) {
     state.mine = mine;
     paintLunar();
   });
-  wiki.on("moveend", paintLunar);
+  wiki.on("moveend", () => { paintTiles(); paintLunar(); });
+  wiki.on("zoomend", paintTiles);
+  paintTiles();
   paintLunar();
-  setTimeout(() => { wiki.invalidateSize(); paintLunar(); }, 60);
+  setTimeout(() => { wiki.invalidateSize(); paintTiles(); paintLunar(); }, 60);
+}
+
+function paintTiles() {
+  const pack = state.pack;
+  const wiki = state.wiki;
+  const tiles = pack && pack.tiles;
+  if (!wiki || !tiles || !tiles.base || !tiles.grid) return;
+  const zoom = wiki.getZoom();
+  let level = Math.round(-zoom);
+  if (level < 0) level = 0;
+  if (level > tiles.zoomMax) level = tiles.zoomMax;
+  const cells = tiles.grid[String(level)] || [];
+  const known = {};
+  cells.forEach(cell => { known[cell[0] + ":" + cell[1]] = true; });
+  const span = tiles.size * Math.pow(2, level);
+  const view = wiki.getBounds().pad(0.35);
+  const west = view.getWest();
+  const east = view.getEast();
+  const top = pack.height - view.getNorth();
+  const bottom = pack.height - view.getSouth();
+  const tx0 = Math.floor(west / span) - 1;
+  const tx1 = Math.floor(east / span) + 1;
+  const ty0 = Math.floor(top / span) - 1;
+  const ty1 = Math.floor(bottom / span) + 1;
+  if (state.groundLevel !== level) {
+    Object.values(state.ground).forEach(layer => wiki.removeLayer(layer));
+    state.ground = {};
+    state.groundLevel = level;
+  }
+  const keep = {};
+  for (let tx = tx0; tx <= tx1; tx += 1) {
+    for (let ty = ty0; ty <= ty1; ty += 1) {
+      const key = tx + ":" + ty;
+      if (!known[key]) continue;
+      keep[key] = true;
+      if (state.ground[key]) continue;
+      const south = pack.height - (ty + 1) * span;
+      const north = pack.height - ty * span;
+      const url = tiles.base + "z" + level + "/" + tx + "_" + ty + ".webp" + tiles.query;
+      state.ground[key] = L.imageOverlay(url, [[south, tx * span], [north, (tx + 1) * span]], {pane: "ground"}).addTo(wiki);
+    }
+  }
+  Object.keys(state.ground).forEach(key => {
+    if (keep[key]) return;
+    wiki.removeLayer(state.ground[key]);
+    delete state.ground[key];
+  });
 }
 
 function paintLunar() {

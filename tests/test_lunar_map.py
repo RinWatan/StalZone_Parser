@@ -11,6 +11,19 @@ class LunarMapTests(unittest.TestCase):
         ])
         self.assertEqual(rows, [{"id": 5, "title": "Аномалии", "color": "#66A9FF", "count": 10}])
 
+    def test_tiles_keep_every_zoom(self):
+        tiles = lunar._tiles({
+            "tileBase": "https://cdn/map/",
+            "tileQuery": "?md5=1",
+            "tileSize": 512,
+            "zoomMax": 3,
+            "grid": {"z0": [[3, 4]], "z3": [[0, 0]]},
+        })
+        self.assertEqual(tiles["base"], "https://cdn/map/")
+        self.assertEqual(tiles["grid"]["0"], [[3, 4]])
+        self.assertEqual(tiles["grid"]["3"], [[0, 0]])
+        self.assertEqual(tiles["zoomMax"], 3)
+
     def test_catalog_keeps_only_maps_with_marks(self):
         payload = {"maps": [
             {"slug": "empty", "title": "Пусто", "markers": 0},
