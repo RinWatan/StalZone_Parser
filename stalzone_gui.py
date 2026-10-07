@@ -1469,9 +1469,12 @@ function wire() {
 async function tick() {
   const data = await pywebview.api.poll();
   const hunt = data.hunt || {rules:[], alerts:[]};
-  $("huntstatus").textContent = hunt.status || "";
+  $("huntstatus").textContent = data.busy && !hunt.running ?
+    "Сейчас идёт прогон или Онлайн. Нажми «Остановить прогон» и дождись завершения текущего запроса, затем начни охоту." : hunt.status || "";
   $("huntstart").disabled = !!data.busy;
-  $("huntstop").disabled = !hunt.running;
+  $("huntstart").title = data.busy ? "Сначала останови текущий прогон или мониторинг" : "Запустить сохранённые условия охоты";
+  $("huntstop").disabled = !data.busy;
+  $("huntstop").textContent = data.busy && !hunt.running ? "Остановить прогон" : "Стоп";
   const ruleKey = JSON.stringify(hunt.rules);
   if (state.huntRules !== ruleKey) {
     state.huntRules = ruleKey;

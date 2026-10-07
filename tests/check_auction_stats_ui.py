@@ -46,6 +46,13 @@ def check():
         report['above_table']=window.evaluate_js("document.getElementById('lotstats').getBoundingClientRect().bottom <= document.getElementById('lotbox').getBoundingClientRect().top")
         assert report['above_table']
         assert 'Надёжность:' in summary
+        bridge._set_busy(True)
+        window.evaluate_js("window.busyCheck=null; (async()=>{ await tick(); window.busyCheck={disabled:document.getElementById('huntstart').disabled,stopEnabled:!document.getElementById('huntstop').disabled,reason:document.getElementById('huntstatus').textContent}; })(); null")
+        busy=wait('window.busyCheck')
+        assert busy['disabled'] and busy['stopEnabled'] and 'прогон' in busy['reason'],busy
+        bridge._set_busy(False)
+        wait("!document.getElementById('huntstart').disabled")
+        report['busy_reason']=True
         window.evaluate_js("document.getElementById('huntpanel').open=true; document.getElementById('huntprice').value='100'; document.getElementById('huntsave').click(); null")
         wait("document.getElementById('huntrules').textContent.includes('Тестовый предмет')")
         assert len(gui.Bridge().hunts.rules())==1
