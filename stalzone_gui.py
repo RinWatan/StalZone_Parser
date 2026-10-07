@@ -171,6 +171,8 @@ class Bridge:
         self._hunt_status = "Охота остановлена"
         self._hunt_running = False
         self._hunt_sound = False
+        self.hunt_worker = None
+        self._hunt_halt = threading.Event()
 
     def add_hunt(self, slug, price, qname, lo, hi):
         info = next((row for row in self.auction if row['id'] == slug), None)
@@ -197,28 +199,31 @@ class Bridge:
 
     def start_hunt(self, sound=False):
         with self._launch_lock:
-            if self.worker and self.worker.is_alive():
-                return {"ok": False, "error": "Останови текущий прогон или мониторинг"}
+            if self.hunt_worker and self.hunt_worker.is_alive():
+                return {"ok": False, "error": "Охота уже запущена"}
             if not self.hunts.rules():
                 return {"ok": False, "error": "Сначала добавь условие охоты"}
             self._hunt_sound = bool(sound)
             with self.lock:
                 self._hunt_running = True
                 self._hunt_status = "Охота запущена · проверяю условия"
-            agent.HALT.clear()
-            self._set_busy(True)
-            self.worker = threading.Thread(target=self._hunt_job, daemon=True)
-            self.worker.start()
+            self._hunt_halt.clear()
+            self.hunt_worker = threading.Thread(target=self._hunt_job, daemon=True)
+            self.hunt_worker.start()
             return {"ok": True}
+
+    def stop_hunt(self):
+        self._hunt_halt.set()
+        return {"ok": True}
 
     def _hunt_check(self):
         rules = self.hunts.rules()
         for slug in dict.fromkeys(rule['slug'] for rule in rules):
-            if agent.HALT.is_set():
+            if self._hunt_halt.is_set():
                 break
             try:
-                lots = agent.live_lots(slug, pages=4)
-                if agent.HALT.is_set():
+                lots = agent.live_lots(slug, pages=4, stop=self._hunt_halt, priority=True)
+                if self._hunt_halt.is_set():
                     break
                 alerts = self.hunts.evaluate(slug, lots)
                 with self.lock:
@@ -239,15 +244,14 @@ class Bridge:
 
     def _hunt_job(self):
         try:
-            while not agent.HALT.is_set():
+            while not self._hunt_halt.is_set():
                 self._hunt_check()
-                if agent.HALT.wait(60):
+                if self._hunt_halt.wait(60):
                     break
         finally:
             with self.lock:
                 self._hunt_running = False
                 self._hunt_status = "Охота остановлена"
-            self._set_busy(False)
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -1433,7 +1437,7 @@ function wire() {
     const r = await pywebview.api.start_hunt($("huntsound").checked);
     $("hunterror").textContent = r.ok ? "" : r.error;
   };
-  $("huntstop").onclick = () => pywebview.api.stop_run();
+  $("huntstop").onclick = () => pywebview.api.stop_hunt();
   $("huntclear").onclick = () => pywebview.api.clear_hunt_alerts();
   $("huntnotice").onclick = () => { pywebview.api.hud_action("full"); show("auc"); $("huntpanel").open = true; };
   $("run").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, $("section").value);
@@ -1469,12 +1473,11 @@ function wire() {
 async function tick() {
   const data = await pywebview.api.poll();
   const hunt = data.hunt || {rules:[], alerts:[]};
-  $("huntstatus").textContent = data.busy && !hunt.running ?
-    "Сейчас идёт прогон или Онлайн. Нажми «Остановить прогон» и дождись завершения текущего запроса, затем начни охоту." : hunt.status || "";
-  $("huntstart").disabled = !!data.busy;
-  $("huntstart").title = data.busy ? "Сначала останови текущий прогон или мониторинг" : "Запустить сохранённые условия охоты";
-  $("huntstop").disabled = !data.busy;
-  $("huntstop").textContent = data.busy && !hunt.running ? "Остановить прогон" : "Стоп";
+  $("huntstatus").textContent = hunt.status || "";
+  $("huntstart").disabled = !!hunt.running;
+  $("huntstart").title = "Запустить охоту параллельно прогону";
+  $("huntstop").disabled = !hunt.running;
+  $("huntstop").textContent = "Стоп охоты";
   const ruleKey = JSON.stringify(hunt.rules);
   if (state.huntRules !== ruleKey) {
     state.huntRules = ruleKey;
@@ -1568,6 +1571,7 @@ def main():
     window.events.loaded += hud.start
     def closing():
         agent.HALT.set()
+        bridge.stop_hunt()
         hud.closing()
     window.events.closing += closing
     window.events.closed += hud.stop

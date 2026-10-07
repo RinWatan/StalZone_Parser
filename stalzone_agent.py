@@ -1053,6 +1053,8 @@ small{{color:#aaa}}
 
 
 _PACE = threading.Lock()
+_REQUEST_QUEUE = threading.Condition(_PACE)
+_PRIORITY_WAITERS = 0
 _NEXT_AT = 0.0
 _GAP = 0.10
 _CLIENT = None
@@ -1103,17 +1105,31 @@ def exbo_headers():
     }
 
 
-def get_json(url):
+def _request_slot(stop=None, priority=False):
+    global _NEXT_AT, _PRIORITY_WAITERS
+    with _REQUEST_QUEUE:
+        if priority:
+            _PRIORITY_WAITERS += 1
+        try:
+            while True:
+                if stop is not None and stop.is_set():
+                    raise RuntimeError("Запрос остановлен")
+                delay = _NEXT_AT - time.time()
+                if delay <= 0 and (priority or not _PRIORITY_WAITERS):
+                    _NEXT_AT = time.time() + _GAP
+                    return
+                _REQUEST_QUEUE.wait(min(0.05, max(0.001, delay)) if delay > 0 else 0.05)
+        finally:
+            if priority:
+                _PRIORITY_WAITERS -= 1
+            _REQUEST_QUEUE.notify_all()
+
+
+def get_json(url, stop=None, priority=False):
     """Один запрос к EXBO. Соединение держится открытым, пауза общая на все потоки."""
     global _NEXT_AT, _GAP
     for attempt in range(5):
-        with _PACE:
-            now = time.time()
-            slot = max(_NEXT_AT, now)
-            wait = slot - now
-            _NEXT_AT = slot + _GAP
-        if wait > 0:
-            time.sleep(wait)
+        _request_slot(stop, priority)
         try:
             resp = _client().get(url, headers=exbo_headers())
             resp.raise_for_status()
@@ -1147,7 +1163,7 @@ def get_json(url):
                 _GAP = min(0.45, max(_GAP * 1.5, _GAP + 0.08))
             else:
                 _GAP = min(0.45, _GAP + 0.03)
-        if HALT.wait(delay):
+        if (HALT if stop is None else stop).wait(delay):
             raise failure
 
 
@@ -1179,17 +1195,16 @@ def cached_live(slug):
     return lots
 
 
-def live_lots(slug, pages=4):
+def live_lots(slug, pages=4, stop=None, priority=False):
     out = []
     offset = 0
     total = None
     while total is None or offset < total:
-        if HALT.is_set():
+        if (HALT if stop is None else stop).is_set():
             break
-        data = get_json(
-            f"{EXBO}/RU/auction/{slug}/lots?additional=true&limit=200&offset={offset}"
-            "&sort=buyout_price&order=asc"
-        )
+        url = (f"{EXBO}/RU/auction/{slug}/lots?additional=true&limit=200&offset={offset}"
+               "&sort=buyout_price&order=asc")
+        data = get_json(url) if stop is None and not priority else get_json(url, stop=stop, priority=priority)
         total = data.get("total") or 0
         batch = data.get("lots") or []
         if not batch:
@@ -2186,7 +2201,8 @@ def fit_budget(deals, budget):
 
 def buy_scan(status=None, budget=0, on_update=None):
     global _GAP
-    _GAP = 0.10
+    with _PACE:
+        _GAP = max(_GAP, 0.10)
     if status:
         status("Собираю каталог аукциона")
     items = buy_targets()

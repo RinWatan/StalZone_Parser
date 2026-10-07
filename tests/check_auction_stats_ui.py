@@ -49,7 +49,7 @@ def check():
         bridge._set_busy(True)
         window.evaluate_js("window.busyCheck=null; (async()=>{ await tick(); window.busyCheck={disabled:document.getElementById('huntstart').disabled,stopEnabled:!document.getElementById('huntstop').disabled,reason:document.getElementById('huntstatus').textContent}; })(); null")
         busy=wait('window.busyCheck')
-        assert busy['disabled'] and busy['stopEnabled'] and 'прогон' in busy['reason'],busy
+        assert not busy['disabled'] and not busy['stopEnabled'],busy
         bridge._set_busy(False)
         wait("!document.getElementById('huntstart').disabled")
         report['busy_reason']=True
@@ -61,8 +61,8 @@ def check():
         bridge._hunt_check()
         assert len(bridge.poll()['hunt']['alerts'])==1
         window.evaluate_js("document.getElementById('huntstop').click(); null")
-        bridge.worker.join(2)
-        assert not bridge.worker.is_alive()
+        bridge.hunt_worker.join(2)
+        assert not bridge.hunt_worker.is_alive()
         report['hunt_stopped']=True
         window.evaluate_js("document.getElementById('huntrules').querySelector('button').click(); null")
         wait("document.getElementById('huntrules').textContent.includes('Нет сохранённых условий')")
@@ -76,8 +76,11 @@ def check():
         report['error']=str(error)
     finally:
         bridge.stop_run()
+        bridge.stop_hunt()
         if bridge.worker:
             bridge.worker.join(2)
+        if bridge.hunt_worker:
+            bridge.hunt_worker.join(2)
         (root/'build/auction_stats_ui.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         window.destroy()
 

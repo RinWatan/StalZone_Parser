@@ -77,7 +77,9 @@ class BridgeHuntTests(unittest.TestCase):
         self.assertTrue(self.bridge.add_hunt('abc','100',a.QLT[4],0,0)['ok'])
     def tearDown(self):
         self.a.HALT.set()
+        self.bridge.stop_hunt()
         if self.bridge.worker: self.bridge.worker.join(2)
+        if self.bridge.hunt_worker: self.bridge.hunt_worker.join(2)
         self.a.HALT.clear()
         self.dir.stop(); self.temp.cleanup()
     def test_live_check_needs_no_history_and_notifies_only_once(self):
@@ -97,9 +99,9 @@ class BridgeHuntTests(unittest.TestCase):
             self.assertTrue(self.bridge.start_hunt()['ok'])
             self.assertTrue(entered.wait(2))
             self.assertFalse(self.bridge.start_hunt()['ok'])
-            self.bridge.stop_run()
-            self.bridge.worker.join(2)
-        self.assertFalse(self.bridge.worker.is_alive())
+            self.bridge.stop_hunt()
+            self.bridge.hunt_worker.join(2)
+        self.assertFalse(self.bridge.hunt_worker.is_alive())
         self.assertFalse(self.bridge.poll()['busy'])
     def test_invalid_catalog_item_is_rejected(self):
         self.assertFalse(self.bridge.add_hunt('unknown','100','Все',0,15)['ok'])
@@ -113,3 +115,66 @@ class BridgeHuntTests(unittest.TestCase):
 
     def test_invalid_history_time_is_not_relabelled_as_fresh(self):
         self.assertEqual(self.a._epoch('invalid'),0)
+
+    def test_hunt_runs_beside_scan_and_stops_independently(self):
+        import threading
+        scan_stop=threading.Event()
+        self.bridge.worker=threading.Thread(target=scan_stop.wait,daemon=True)
+        self.bridge.worker.start()
+        self.bridge._set_busy(True)
+        try:
+            with patch.object(self.bridge,'_hunt_check'):
+                self.assertTrue(self.bridge.start_hunt()['ok'])
+                self.bridge.stop_run()
+                self.assertFalse(self.bridge._hunt_halt.is_set())
+                self.bridge.stop_hunt()
+                self.bridge.hunt_worker.join(2)
+                self.assertTrue(self.a.HALT.is_set())
+                self.assertTrue(self.bridge.poll()['busy'])
+        finally:
+            scan_stop.set(); self.bridge.worker.join(2)
+
+    def test_stopped_scan_does_not_cancel_hunt_lots(self):
+        self.a.HALT.set()
+        with patch.object(self.a,'get_json',return_value={'lots':[{'amount':1,'buyoutPrice':100}], 'total':1}) as get:
+            lots=self.a.live_lots('abc',stop=self.bridge._hunt_halt,priority=True)
+            self.assertEqual(len(lots),1)
+            self.assertIs(get.call_args.kwargs['stop'],self.bridge._hunt_halt)
+
+class RequestQueueTests(unittest.TestCase):
+    def test_starting_scan_preserves_shared_rate_limit_backoff(self):
+        import stalzone_agent as a
+        previous=a._GAP
+        try:
+            a._GAP=.4
+            with patch.object(a,'buy_targets',return_value=[]): a.buy_scan()
+            self.assertEqual(a._GAP,.4)
+        finally:
+            a._GAP=previous
+
+    def test_priority_takes_next_slot_without_bypassing_gap(self):
+        import threading
+        import stalzone_agent as a
+        old_next,old_gap=a._NEXT_AT,a._GAP
+        order=[]
+        with a._PACE:
+            a._NEXT_AT=time.time()+.3
+            a._GAP=.08
+        def take(name,priority):
+            a._request_slot(threading.Event(),priority)
+            order.append((name,time.time()))
+        normal=threading.Thread(target=take,args=('scan',False))
+        priority=threading.Thread(target=take,args=('hunt',True))
+        try:
+            normal.start(); priority.start()
+            normal.join(2); priority.join(2)
+            self.assertEqual([name for name,_ in order],['hunt','scan'])
+            self.assertGreaterEqual(order[1][1]-order[0][1],.07)
+        finally:
+            a._NEXT_AT,a._GAP=old_next,old_gap
+    def test_cancelled_priority_waiter_does_not_block_scan(self):
+        import threading
+        import stalzone_agent as a
+        stopped=threading.Event(); stopped.set()
+        with self.assertRaises(RuntimeError): a._request_slot(stopped,True)
+        self.assertEqual(a._PRIORITY_WAITERS,0)
