@@ -9,7 +9,6 @@ from pathlib import Path
 
 import stalzone_agent as agent
 import stalzone_pda as pda
-from stalzone_trading import HuntStore
 
 SECTIONS = [
     ("Общий", None),
@@ -166,92 +165,6 @@ class Bridge:
         self._compact = []
         self._launch_lock = threading.Lock()
         self._search_lock = threading.Lock()
-        self.hunts = HuntStore(agent.DIR / "price_watch.json")
-        self._hunt_alerts = []
-        self._hunt_status = "Охота остановлена"
-        self._hunt_running = False
-        self._hunt_sound = False
-        self.hunt_worker = None
-        self._hunt_halt = threading.Event()
-
-    def add_hunt(self, slug, price, qname, lo, hi):
-        info = next((row for row in self.auction if row['id'] == slug), None)
-        if not info:
-            return {"ok": False, "error": "Выбери предмет в каталоге"}
-        try:
-            quality = None if not qname or qname == "Все" else agent.QLT.index(qname)
-            self.hunts.add(slug, info['name'], quality, lo, hi, agent.parse_money(price))
-            return {"ok": True}
-        except (ValueError, OSError) as error:
-            return {"ok": False, "error": str(error)}
-
-    def remove_hunt(self, rule_id):
-        try:
-            self.hunts.remove(rule_id)
-            return {"ok": True}
-        except OSError as error:
-            return {"ok": False, "error": str(error)}
-
-    def clear_hunt_alerts(self):
-        with self.lock:
-            self._hunt_alerts = []
-        return {"ok": True}
-
-    def start_hunt(self, sound=False):
-        with self._launch_lock:
-            if self.hunt_worker and self.hunt_worker.is_alive():
-                return {"ok": False, "error": "Охота уже запущена"}
-            if not self.hunts.rules():
-                return {"ok": False, "error": "Сначала добавь условие охоты"}
-            self._hunt_sound = bool(sound)
-            with self.lock:
-                self._hunt_running = True
-                self._hunt_status = "Охота запущена · проверяю условия"
-            self._hunt_halt.clear()
-            self.hunt_worker = threading.Thread(target=self._hunt_job, daemon=True)
-            self.hunt_worker.start()
-            return {"ok": True}
-
-    def stop_hunt(self):
-        self._hunt_halt.set()
-        return {"ok": True}
-
-    def _hunt_check(self):
-        rules = self.hunts.rules()
-        for slug in dict.fromkeys(rule['slug'] for rule in rules):
-            if self._hunt_halt.is_set():
-                break
-            try:
-                lots = agent.live_lots(slug, pages=4, stop=self._hunt_halt, priority=True)
-                if self._hunt_halt.is_set():
-                    break
-                alerts = self.hunts.evaluate(slug, lots)
-                with self.lock:
-                    self._hunt_alerts = (alerts + self._hunt_alerts)[:10]
-                    name = next(r['name'] for r in rules if r['slug'] == slug)
-                    self._hunt_status = f"Проверено {name}, {time.strftime('%H:%M:%S')} · следующий круг через 60с"
-                    if len(lots) >= 800:
-                        self._hunt_status += " · проверены первые 800 лотов"
-                if alerts and self._hunt_sound:
-                    try:
-                        import winsound
-                        winsound.MessageBeep(winsound.MB_OK)
-                    except Exception:
-                        pass
-            except Exception as error:
-                with self.lock:
-                    self._hunt_status = f"Не удалось проверить лоты: {error}"
-
-    def _hunt_job(self):
-        try:
-            while not self._hunt_halt.is_set():
-                self._hunt_check()
-                if self._hunt_halt.wait(60):
-                    break
-        finally:
-            with self.lock:
-                self._hunt_running = False
-                self._hunt_status = "Охота остановлена"
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -520,8 +433,7 @@ class Bridge:
                 "rev": self.rev,
                 "compact": list(self._compact),
                 "hud": self._hud.snapshot() if self._hud else {},
-                "hunt": {"rules": self.hunts.rules(), "alerts": list(self._hunt_alerts),
-                         "running": self._hunt_running, "status": self._hunt_status},
+
             }
 
     def _budget(self, text):
@@ -920,7 +832,6 @@ PAGE = r"""<!DOCTYPE html>
     <button class="stop" id="quickstop" disabled>Стоп</button>
     <button id="quickmap">Карта</button>
   </div>
-  <div id="huntnotice" style="font-size:12px;padding-top:6px;color:var(--gold);cursor:pointer"></div>
 </div>
 <div id="full">
 <div class="bar">
@@ -1028,21 +939,6 @@ function build() {
         </div>
         <div id="lotinfo">Каталог грузится при открытии вкладки.</div>
         <div id="lotstats" style="padding:10px 0;color:var(--gold)" title="Цена продажи делится на количество предметов. Каждая сделка имеет одинаковый вес. Учитываются выбранные редкость и заточка; дорогие выбросы не удаляются автоматически."></div>
-        <details id="huntpanel" style="padding:8px 0">
-          <summary style="cursor:pointer;color:var(--gold)">Охота за предметами · ценовые уведомления</summary>
-          <p style="font-size:12px">Выбери предмет, редкость и заточку выше. Проверка раз в минуту, до 10 условий. Сигнал сообщает о цене, а не о гарантированной прибыли.</p>
-          <div class="tools">
-            <span>Цена до, ₽/шт</span><input id="huntprice" placeholder="Например, 70к" style="width:120px"/>
-            <button id="huntsave">Добавить условие</button>
-            <label><input id="huntsound" type="checkbox" style="width:auto"/> Звук</label>
-            <button id="huntstart">Начать охоту</button><button id="huntstop">Стоп</button>
-          </div>
-          <div id="hunterror" role="status"></div>
-          <div id="huntrules" style="font-size:12px"></div>
-          <div id="huntstatus" style="font-size:12px;padding:6px 0"></div>
-          <div id="huntalert" style="color:var(--gold)"></div>
-          <button id="huntclear">Скрыть сигналы</button>
-        </details>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
         <div class="sheet" id="lotbox"></div>
       </div>
@@ -1428,18 +1324,6 @@ function showLots() {
 }
 
 function wire() {
-  $("huntsave").onclick = async () => {
-    const r = await pywebview.api.add_hunt(selected, $("huntprice").value, $("lq").value, $("lo").value, $("hi").value);
-    $("hunterror").textContent = r.ok ? "Условие сохранено" : r.error;
-    tick();
-  };
-  $("huntstart").onclick = async () => {
-    const r = await pywebview.api.start_hunt($("huntsound").checked);
-    $("hunterror").textContent = r.ok ? "" : r.error;
-  };
-  $("huntstop").onclick = () => pywebview.api.stop_hunt();
-  $("huntclear").onclick = () => pywebview.api.clear_hunt_alerts();
-  $("huntnotice").onclick = () => { pywebview.api.hud_action("full"); show("auc"); $("huntpanel").open = true; };
   $("run").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, $("section").value);
   $("auto").onclick = () => pywebview.api.start_run(true, $("mins").value, $("budget").value, $("section").value);
   $("live").onclick = () => pywebview.api.start_live($("budget").value);
@@ -1472,26 +1356,6 @@ function wire() {
 
 async function tick() {
   const data = await pywebview.api.poll();
-  const hunt = data.hunt || {rules:[], alerts:[]};
-  $("huntstatus").textContent = hunt.status || "";
-  $("huntstart").disabled = !!hunt.running;
-  $("huntstart").title = "Запустить охоту параллельно прогону";
-  $("huntstop").disabled = !hunt.running;
-  $("huntstop").textContent = "Стоп охоты";
-  const ruleKey = JSON.stringify(hunt.rules);
-  if (state.huntRules !== ruleKey) {
-    state.huntRules = ruleKey;
-    $("huntrules").innerHTML = (hunt.rules || []).map(r => `<div style="padding:5px 0">${esc(r.name)} · ${esc(r.qlt === null ? "Все редкости" : $("lq").options[r.qlt+1].text)} · +${r.lo}–${r.hi} · до ${Number(r.max_unit).toLocaleString('ru-RU')} ₽/шт <button data-rule="${esc(r.id)}">Удалить</button></div>`).join("") || "Нет сохранённых условий";
-    $("huntrules").querySelectorAll("button").forEach(b => b.onclick = async () => {
-      const r = await pywebview.api.remove_hunt(b.dataset.rule);
-      if (!r.ok) $("hunterror").textContent = r.error;
-    });
-  }
-  const alerts = hunt.alerts || [];
-  const describeAlert = r => `${r.name} · ${Number(r.unit).toLocaleString('ru-RU')} ₽/шт · лот ${Number(r.buyout).toLocaleString('ru-RU')} ₽ (${r.amount} шт) · сигнал ${new Date(r.time*1000).toLocaleTimeString('ru-RU')}`;
-  $("huntalert").textContent = alerts.slice(0,3).map(describeAlert).join("\n");
-  $("huntalert").style.whiteSpace = "pre-line";
-  $("huntnotice").textContent = alerts.length ? describeAlert(alerts[0]) : (hunt.running ? hunt.status : "");
   $("status").textContent = data.status || "";
   $("log").textContent = (data.logs || []).join("\n");
   $("log").scrollTop = $("log").scrollHeight;
@@ -1571,7 +1435,6 @@ def main():
     window.events.loaded += hud.start
     def closing():
         agent.HALT.set()
-        bridge.stop_hunt()
         hud.closing()
     window.events.closing += closing
     window.events.closed += hud.stop

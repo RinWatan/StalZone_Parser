@@ -46,27 +46,6 @@ def check():
         report['above_table']=window.evaluate_js("document.getElementById('lotstats').getBoundingClientRect().bottom <= document.getElementById('lotbox').getBoundingClientRect().top")
         assert report['above_table']
         assert 'Надёжность:' in summary
-        bridge._set_busy(True)
-        window.evaluate_js("window.busyCheck=null; (async()=>{ await tick(); window.busyCheck={disabled:document.getElementById('huntstart').disabled,stopEnabled:!document.getElementById('huntstop').disabled,reason:document.getElementById('huntstatus').textContent}; })(); null")
-        busy=wait('window.busyCheck')
-        assert not busy['disabled'] and not busy['stopEnabled'],busy
-        bridge._set_busy(False)
-        wait("!document.getElementById('huntstart').disabled")
-        report['busy_reason']=True
-        window.evaluate_js("document.getElementById('huntpanel').open=true; document.getElementById('huntprice').value='100'; document.getElementById('huntsave').click(); null")
-        wait("document.getElementById('huntrules').textContent.includes('Тестовый предмет')")
-        assert len(gui.Bridge().hunts.rules())==1
-        window.evaluate_js("document.getElementById('huntstart').click(); null")
-        report['hunt_signal']=wait("document.getElementById('huntnotice').textContent.includes('80') && document.getElementById('huntnotice').textContent")
-        bridge._hunt_check()
-        assert len(bridge.poll()['hunt']['alerts'])==1
-        window.evaluate_js("document.getElementById('huntstop').click(); null")
-        bridge.hunt_worker.join(2)
-        assert not bridge.hunt_worker.is_alive()
-        report['hunt_stopped']=True
-        window.evaluate_js("document.getElementById('huntrules').querySelector('button').click(); null")
-        wait("document.getElementById('huntrules').textContent.includes('Нет сохранённых условий')")
-        assert not gui.Bridge().hunts.rules()
         window.evaluate_js("document.getElementById('hist').click(); null")
         assert window.evaluate_js("document.getElementById('lotstats').textContent") == summary
         window.evaluate_js("document.getElementById('lo').value='5'; document.getElementById('hi').value='5'; document.getElementById('lo').onchange(); null")
@@ -76,11 +55,8 @@ def check():
         report['error']=str(error)
     finally:
         bridge.stop_run()
-        bridge.stop_hunt()
         if bridge.worker:
             bridge.worker.join(2)
-        if bridge.hunt_worker:
-            bridge.hunt_worker.join(2)
         (root/'build/auction_stats_ui.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         window.destroy()
 
