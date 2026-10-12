@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 import stalzone_agent as agent
+import stalzone_lunar as lunar
 import stalzone_pda as pda
 
 SECTIONS = [
@@ -342,7 +343,7 @@ class Bridge:
 
     def add_mark(self, slug, lat, lng, title):
         slug = str(slug or "").strip()
-        if slug not in self._map_slugs():
+        if not slug or len(slug) > 48 or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in slug):
             return []
         try:
             lat = float(lat)
@@ -367,6 +368,24 @@ class Bridge:
         rows = [mark for mark in self._load_marks() if str(mark.get("id")) != mark_id]
         self._write_json("wiki_marks.json", rows)
         return self._marks_of(str(slug or ""))
+
+    def lunar_catalog(self):
+        try:
+            return lunar.catalog()
+        except Exception as error:
+            self.note("Карты Лунара: " + str(error))
+            return []
+
+    def lunar_map(self, slug):
+        slug = str(slug or "").strip()
+        try:
+            pack = lunar.load(agent.DIR, slug)
+        except Exception as error:
+            self.note("Карта не загрузилась: " + str(error))
+            return {"error": str(error)}
+        pack["mine"] = self._marks_of(slug)
+        self.note(f"Карта {pack['title']}: {len(pack['markers'])} меток")
+        return pack
 
     def _read_json(self, name):
         path = agent.DIR / name
@@ -952,22 +971,8 @@ function build() {
   const mapView = document.createElement("div");
   mapView.className = "view";
   mapView.id = "v-map";
-  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div id="mapstatus" role="status" style="padding:4px 8px;color:var(--dim)"></div><div class="tools" id="maplayers"></div><div id="wikimap"></div></div>`;
+  mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div id="mapstatus" role="status" style="padding:4px 8px;color:var(--dim)">Карты Лунара загрузятся при открытии вкладки.</div><div class="tools" id="maplayers"></div><div id="wikimap"></div></div>`;
   main.appendChild(mapView);
-  [
-    ["south-zone", "Южная Зона"],
-    ["north-zone", "Северная Зона"],
-    ["wild-north", "Дикий Север"],
-    ["lyubech", "Любеч-3"],
-    ["labyrinth", "Лабиринт"],
-    ["graveyard", "Могильник"]
-  ].forEach(([slug, title]) => {
-    const btn = document.createElement("button");
-    btn.textContent = title;
-    btn.dataset.slug = slug;
-    btn.onclick = () => openWiki(slug);
-    $("mapbar").appendChild(btn);
-  });
 }
 
 function mapViewOf(settings) {
@@ -1101,6 +1106,7 @@ function markIcon(url) {
 }
 
 function paintMarks() {
+  if (state.pack && state.pack.lunar) return paintLunar();
   if (!state.wiki || !state.pack) return;
   if (state.marks) state.marks.remove();
   const query = ($("mapq") ? $("mapq").value : "").trim().toLowerCase();
@@ -1203,6 +1209,234 @@ async function openWiki(slug) {
   }
 }
 
+async function openLunar(slug) {
+  const request = state.mapRequest = (state.mapRequest || 0) + 1;
+  state.mapSlug = slug;
+  state.mapOpened = true;
+  state.placing = false;
+  $("wikimap").style.pointerEvents = "none";
+  $("maplayers").style.pointerEvents = "none";
+  $("mapstatus").textContent = "Загружаю карту Лунара…";
+  document.querySelectorAll("#mapbar button").forEach(b => b.classList.toggle("on", b.dataset.slug === slug));
+  try {
+    const pack = await pywebview.api.lunar_map(slug);
+    if (request !== state.mapRequest) return;
+    if (!pack || pack.error) throw new Error(pack?.error || "Пустой ответ карты");
+    drawLunar(pack);
+    $("wikimap").style.pointerEvents = "";
+    $("maplayers").style.pointerEvents = "";
+  } catch (error) {
+    if (request !== state.mapRequest) return;
+    state.mapOpened = false;
+    $("mapstatus").textContent = "Карта не загрузилась: " + error.message;
+  }
+}
+
+function drawLunar(pack) {
+  const box = $("wikimap");
+  if (state.wiki) {
+    state.wiki.remove();
+    state.wiki = null;
+  }
+  const wiki = L.map(box, {
+    crs: L.CRS.Simple,
+    minZoom: -4,
+    maxZoom: 1,
+    attributionControl: false,
+    preferCanvas: true,
+    zoomSnap: 0.25
+  });
+  wiki.createPane("ground");
+  wiki.getPane("ground").style.zIndex = 250;
+  const bounds = [[0, 0], [pack.height, pack.width]];
+  if (pack.overview) L.imageOverlay(pack.overview, bounds, {pane: "ground"}).addTo(wiki);
+  wiki.fitBounds(bounds);
+  wiki.setMaxBounds(bounds);
+  state.wiki = wiki;
+  state.pack = pack;
+  state.ground = {};
+  state.groundLevel = null;
+  state.mine = pack.mine || [];
+  state.placing = false;
+  state.hidden = {};
+  state.colors = {};
+  (pack.categories || []).forEach(cat => { state.colors[cat.id] = cat.color; });
+  const bar = $("maplayers");
+  bar.innerHTML = "";
+  const search = document.createElement("input");
+  search.id = "mapq";
+  search.placeholder = "Поиск метки";
+  search.oninput = paintLunar;
+  bar.appendChild(search);
+  const name = document.createElement("input");
+  name.id = "markname";
+  name.placeholder = "Своя метка";
+  bar.appendChild(name);
+  const put = document.createElement("button");
+  put.textContent = "Ставить";
+  put.onclick = () => {
+    state.placing = !state.placing;
+    put.classList.toggle("on", state.placing);
+    box.style.cursor = state.placing ? "crosshair" : "";
+  };
+  bar.appendChild(put);
+  const showAll = document.createElement("button");
+  showAll.textContent = "Показать все";
+  showAll.onclick = () => {
+    state.hidden = {};
+    bar.querySelectorAll("button[data-cat], button[data-own]").forEach(b => b.classList.add("on"));
+    paintLunar();
+  };
+  bar.appendChild(showAll);
+  const hideAll = document.createElement("button");
+  hideAll.textContent = "Скрыть все";
+  hideAll.onclick = () => {
+    (pack.categories || []).forEach(cat => { state.hidden[cat.id] = true; });
+    state.hidden["Свои"] = true;
+    bar.querySelectorAll("button[data-cat], button[data-own]").forEach(b => b.classList.remove("on"));
+    paintLunar();
+  };
+  bar.appendChild(hideAll);
+  const own = document.createElement("button");
+  own.textContent = "Свои";
+  own.className = "on";
+  own.dataset.own = "1";
+  own.onclick = () => {
+    state.hidden["Свои"] = !state.hidden["Свои"];
+    own.classList.toggle("on", !state.hidden["Свои"]);
+    paintLunar();
+  };
+  bar.appendChild(own);
+  (pack.categories || []).forEach(cat => {
+    const button = document.createElement("button");
+    button.textContent = cat.title;
+    button.className = "on";
+    button.dataset.cat = String(cat.id);
+    button.onclick = () => {
+      state.hidden[cat.id] = !state.hidden[cat.id];
+      button.classList.toggle("on", !state.hidden[cat.id]);
+      paintLunar();
+    };
+    bar.appendChild(button);
+  });
+  wiki.on("click", async (event) => {
+    if (!state.placing) return;
+    const here = state.pack.slug;
+    const title = ($("markname").value || "").trim() || "Метка";
+    const mine = await pywebview.api.add_mark(here, event.latlng.lat, event.latlng.lng, title);
+    if (state.pack.slug !== here) return;
+    state.mine = mine;
+    paintLunar();
+  });
+  wiki.on("moveend", () => { paintTiles(); paintLunar(); });
+  wiki.on("zoomend", paintTiles);
+  paintTiles();
+  paintLunar();
+  setTimeout(() => { wiki.invalidateSize(); paintTiles(); paintLunar(); }, 60);
+}
+
+function paintTiles() {
+  const pack = state.pack;
+  const wiki = state.wiki;
+  const tiles = pack && pack.tiles;
+  if (!wiki || !tiles || !tiles.base || !tiles.grid) return;
+  const zoom = wiki.getZoom();
+  let level = Math.round(-zoom);
+  if (level < 0) level = 0;
+  if (level > tiles.zoomMax) level = tiles.zoomMax;
+  const cells = tiles.grid[String(level)] || [];
+  const known = {};
+  cells.forEach(cell => { known[cell[0] + ":" + cell[1]] = true; });
+  const span = tiles.size * Math.pow(2, level);
+  const view = wiki.getBounds().pad(0.35);
+  const west = view.getWest();
+  const east = view.getEast();
+  const top = pack.height - view.getNorth();
+  const bottom = pack.height - view.getSouth();
+  const tx0 = Math.floor(west / span) - 1;
+  const tx1 = Math.floor(east / span) + 1;
+  const ty0 = Math.floor(top / span) - 1;
+  const ty1 = Math.floor(bottom / span) + 1;
+  if (state.groundLevel !== level) {
+    Object.values(state.ground).forEach(layer => wiki.removeLayer(layer));
+    state.ground = {};
+    state.groundLevel = level;
+  }
+  const keep = {};
+  for (let tx = tx0; tx <= tx1; tx += 1) {
+    for (let ty = ty0; ty <= ty1; ty += 1) {
+      const key = tx + ":" + ty;
+      if (!known[key]) continue;
+      keep[key] = true;
+      if (state.ground[key]) continue;
+      const south = pack.height - (ty + 1) * span;
+      const north = pack.height - ty * span;
+      const url = tiles.base + "z" + level + "/" + tx + "_" + ty + ".webp" + tiles.query;
+      state.ground[key] = L.imageOverlay(url, [[south, tx * span], [north, (tx + 1) * span]], {pane: "ground"}).addTo(wiki);
+    }
+  }
+  Object.keys(state.ground).forEach(key => {
+    if (keep[key]) return;
+    wiki.removeLayer(state.ground[key]);
+    delete state.ground[key];
+  });
+}
+
+function paintLunar() {
+  if (!state.wiki || !state.pack || !state.pack.lunar) return;
+  if (state.marks) state.marks.remove();
+  const pack = state.pack;
+  const query = ($("mapq") ? $("mapq").value : "").trim().toLowerCase();
+  const bounds = state.wiki.getBounds();
+  const layer = L.layerGroup();
+  let shown = 0;
+  let matched = 0;
+  const limit = 4000;
+  (pack.markers || []).forEach(mark => {
+    const cat = mark[2];
+    if (state.hidden[cat]) return;
+    const title = pack.titles[mark[3]] || "Метка";
+    if (query && !title.toLowerCase().includes(query)) return;
+    matched += 1;
+    const lat = pack.height - mark[1];
+    const lng = mark[0];
+    if (!bounds.contains([lat, lng])) return;
+    if (shown >= limit) return;
+    shown += 1;
+    const color = state.colors[cat] || "#e0b15a";
+    const point = L.circleMarker([lat, lng], {radius: 4, color, fillColor: color, fillOpacity: 0.9, weight: 1});
+    point.bindTooltip(title);
+    point.on("click", () => navigator.clipboard.writeText(title));
+    point.addTo(layer);
+  });
+  if (!state.hidden["Свои"]) {
+    (state.mine || []).forEach(mark => {
+      const blob = ("свои " + (mark.title || "")).toLowerCase();
+      if (query && !blob.includes(query)) return;
+      const point = L.circleMarker([mark.lat, mark.lng], {
+        radius: 7, color: "#e0b15a", fillColor: "#e0b15a", fillOpacity: 1, weight: 2
+      });
+      point.bindTooltip("Своя: " + mark.title);
+      point.on("click", async (event) => {
+        L.DomEvent.stopPropagation(event);
+        if (state.placing) return;
+        if (!confirm("Убрать метку «" + mark.title + "»?")) return;
+        const here = state.pack.slug;
+        const mine = await pywebview.api.delete_mark(here, mark.id);
+        if (state.pack.slug !== here) return;
+        state.mine = mine;
+        paintLunar();
+      });
+      point.addTo(layer);
+    });
+  }
+  layer.addTo(state.wiki);
+  state.marks = layer;
+  let text = pack.title + " · " + (pack.markers || []).length + " меток, Лунар";
+  if (matched > shown) text += " · на экране " + shown + ", приблизь или включи поиск";
+  $("mapstatus").textContent = text;
+}
+
 function show(key) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
@@ -1210,23 +1444,21 @@ function show(key) {
   if (key === "map") {
     if (!state.mapBooted) {
       state.mapBooted = true;
-      pywebview.api.pda_status().then(info => {
-        if (info && info.ok && info.maps.length) {
-          state.local = true;
-          const bar = $("mapbar");
-          bar.innerHTML = "";
-          info.maps.forEach(item => {
-            const btn = document.createElement("button");
-            btn.textContent = item.title;
-            btn.dataset.slug = item.slug;
-            btn.onclick = () => openPda(item.slug);
-            bar.appendChild(btn);
-          });
-          openPda(info.maps[0].slug);
-          return;
-        }
-        openWiki(state.mapSlug || "south-zone");
-      }).catch(() => openWiki(state.mapSlug || "south-zone"));
+      pywebview.api.lunar_catalog().then(maps => {
+        const bar = $("mapbar");
+        bar.innerHTML = "";
+        (maps || []).forEach(item => {
+          const btn = document.createElement("button");
+          btn.textContent = item.title;
+          btn.dataset.slug = item.slug;
+          btn.onclick = () => openLunar(item.slug);
+          bar.appendChild(btn);
+        });
+        if (maps && maps.length) openLunar(maps[0].slug);
+        else $("mapstatus").textContent = "Лунар не отдал карты";
+      }).catch(error => {
+        $("mapstatus").textContent = "Карты не загрузились: " + error.message;
+      });
     } else if (state.wiki) {
       setTimeout(() => state.wiki.invalidateSize(), 60);
     }
