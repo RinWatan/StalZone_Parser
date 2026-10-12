@@ -1455,8 +1455,12 @@ function show(key) {
           bar.appendChild(btn);
         });
         if (maps && maps.length) openLunar(maps[0].slug);
-        else $("mapstatus").textContent = "Лунар не отдал карты";
+        else {
+          state.mapBooted = false;
+          $("mapstatus").textContent = "Лунар не отдал карты. Перейдите на другую вкладку и вернитесь, чтобы повторить.";
+        }
       }).catch(error => {
+        state.mapBooted = false;
         $("mapstatus").textContent = "Карты не загрузились: " + error.message;
       });
     } else if (state.wiki) {

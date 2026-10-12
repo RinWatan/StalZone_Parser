@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+from pathlib import Path
 
 import stalzone_lunar as lunar
 
@@ -30,14 +32,35 @@ class LunarMapTests(unittest.TestCase):
             {"slug": "yug", "title": "Южная зона", "markers": 3},
             {"slug": "north", "title": "Север", "markers": 9},
         ]}
-        rows = []
-        for item in payload["maps"]:
-            count = int(item.get("markers") or 0)
-            if count <= 0 or not item.get("slug"):
-                continue
-            rows.append({"slug": item["slug"], "title": item["title"], "markers": count})
-        rows.sort(key=lambda row: row["markers"], reverse=True)
+        with patch.object(lunar,'_json',return_value=payload):
+            rows = lunar.catalog()
         self.assertEqual([row["slug"] for row in rows], ["north", "yug"])
+
+    def test_slug_cannot_escape_cache_folder(self):
+        with patch.object(lunar,'_json') as fetch:
+            with self.assertRaises(ValueError): lunar.load(Path('.'),'../outside')
+            fetch.assert_not_called()
+
+    def test_decoder_filename_cannot_escape_cache_folder(self):
+        with self.assertRaises(ValueError): lunar._markers(Path('.'),'../../outside','decode','yug',[])
+
+    def test_cache_detects_title_and_chunk_revision_changes(self):
+        base={'format':{'salt':'abc','entry':'run'},'version':{'id':1},'titles':['A'],
+              'categories':[], 'chunks':[{'id':1,'count':2,'revision':1}]}
+        first=lunar._cache_stamp(base)
+        base['titles']=['B']
+        self.assertNotEqual(first,lunar._cache_stamp(base))
+        second=lunar._cache_stamp(base)
+        base['chunks'][0]['revision']=2
+        self.assertNotEqual(second,lunar._cache_stamp(base))
+
+    def test_temporary_tile_signatures_do_not_invalidate_markers(self):
+        manifest={'version':{'id':1,'width':5120,'overview':'https://cdn/map.webp?expires=1',
+                             'tileQuery':'?expires=1&md5=a'}}
+        first=lunar._cache_stamp(manifest)
+        manifest['version']['overview']='https://cdn/map.webp?expires=2'
+        manifest['version']['tileQuery']='?expires=2&md5=b'
+        self.assertEqual(first,lunar._cache_stamp(manifest))
 
 
 if __name__ == "__main__":

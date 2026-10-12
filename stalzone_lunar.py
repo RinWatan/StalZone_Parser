@@ -3,6 +3,8 @@
 import json
 import math
 import struct
+import re
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -24,12 +26,14 @@ def catalog():
 
 def load(folder, slug):
     slug = str(slug or "").strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", slug):
+        raise ValueError("Неверная локация карты")
     manifest = _json(f"{ROOT}/{slug}")
     version = manifest.get("version") or {}
     chunks = manifest.get("chunks") or []
     salt = str((manifest.get("format") or {}).get("salt") or "")
     entry = str((manifest.get("format") or {}).get("entry") or "")
-    stamp = f"{salt}:{version.get('id')}:{sum(int(c.get('count') or 0) for c in chunks)}"
+    stamp = _cache_stamp(manifest)
     cache = Path(folder) / "lunar_cache"
     cache.mkdir(parents=True, exist_ok=True)
     saved = _read(cache / f"{slug}.json")
@@ -54,6 +58,13 @@ def load(folder, slug):
         "categories": saved["categories"],
         "markers": saved["markers"],
     }
+
+
+def _cache_stamp(manifest):
+    metadata = {key: manifest.get(key) for key in ('format','titles','categories','chunks')}
+    version = manifest.get('version') or {}
+    metadata['version'] = {key: version.get(key) for key in ('id','width','height','tileSize','zoomMax','grid')}
+    return hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()
 
 
 def _tiles(version):
@@ -87,6 +98,8 @@ def _categories(rows):
 def _markers(cache, salt, entry, slug, chunks):
     if not salt or not entry:
         raise RuntimeError("Лунар не отдал разборщик карты")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", salt):
+        raise ValueError("Неверный идентификатор разборщика карты")
     try:
         from wasmtime import Instance, Module, Store
     except ImportError as error:
