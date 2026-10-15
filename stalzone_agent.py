@@ -1870,11 +1870,11 @@ def _fair_exit(samples, now, need):
     return statistics.median(kept), per_h
 
 
-def find_flips(book, slug, name, allow_single=False):
+def find_flips(book, slug, name, allow_single=False, lots=None, limit=3):
     """Лот выгоден, только если его реально покупают прямо сейчас и после комиссии есть запас."""
     now = time.time()
     offers = {}
-    for lot in cached_live(slug):
+    for lot in (cached_live(slug) if lots is None else lots):
         buy = int(lot.get("buyoutPrice") or 0)
         amt = int(lot.get("amount") or 0)
         add = lot.get("additional") or {}
@@ -1931,7 +1931,7 @@ def find_flips(book, slug, name, allow_single=False):
             "confidence": confidence(hist, now),
         })
     deals.sort(key=lambda r: (r["profit"] * r["count"], r["profit"] * r["per_h"]), reverse=True)
-    return deals[:3]
+    return deals if limit is None else deals[:limit]
 
 
 def sell_call(last, sold, live):

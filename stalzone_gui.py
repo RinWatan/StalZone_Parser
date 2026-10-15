@@ -10,6 +10,7 @@ from pathlib import Path
 import stalzone_agent as agent
 import stalzone_lunar as lunar
 import stalzone_pda as pda
+import stalzone_tracker as tracker
 
 SECTIONS = [
     ("Общий", None),
@@ -95,7 +96,8 @@ def rows_from(data):
                     money(r["gain"]), f"{(r.get('roi') or 0) * 100:.0f}%",
                     f"{r.get('per_h', 0):.1f}", money(r.get("hour_gain") or 0),
                     "Недостаточно данных — проверь рынок" if (r.get("confidence") or {}).get("level") == "low" else r.get("plan") or "ВЫКУПИТЬ",
-                    (r.get("confidence") or {}).get("detail") or "Нет оценки",
+                    ((r.get("confidence") or {}).get("detail") or "Нет оценки") +
+                    (f" · SZ Tracker → EXBO, проверено {time.strftime('%H:%M:%S', time.localtime(r['verified_at']))}" if r.get('verified_at') else ""),
                 ],
                 "tag": tag,
             })
@@ -143,6 +145,14 @@ def rows_from(data):
     return tables
 
 
+def compact_buys(rows):
+    deals = sorted(rows, key=lambda r: r.get('gain', 0), reverse=True)
+    return [{'name':r['name'],
+             'price':'Недостаточно данных — проверь рынок' if (r.get('confidence') or {}).get('level') == 'low' else r.get('plan') or money(r['buyout']),
+             'gain':'—' if (r.get('confidence') or {}).get('level') == 'low' else money(r['gain']),
+             'copies':r['copies']} for r in deals[:5]]
+
+
 class Bridge:
     def __init__(self):
         self.lock = threading.Lock()
@@ -166,6 +176,9 @@ class Bridge:
         self._compact = []
         self._launch_lock = threading.Lock()
         self._search_lock = threading.Lock()
+        self._tracker_state = {'running':False,'phase':''}
+        self._tracker_rows = []
+        self._tracker_visible = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -420,10 +433,7 @@ class Bridge:
         with self.lock:
             self.tables.update(fresh)
             if 'buys' in data:
-                deals = sorted(data.get('buys') or [], key=lambda r: r.get('gain', 0), reverse=True)
-                self._compact = [{'name': r['name'], 'price': 'Недостаточно данных — проверь рынок' if (r.get('confidence') or {}).get('level') == 'low' else r.get('plan') or money(r['buyout']),
-                                  'gain': '—' if (r.get('confidence') or {}).get('level') == 'low' else money(r['gain']), 'copies': r['copies']}
-                                 for r in deals[:5]]
+                self._compact = compact_buys(data.get('buys') or [])
             self.rev += 1
 
     def hud_action(self, action):
@@ -444,6 +454,16 @@ class Bridge:
 
     def poll(self):
         with self.lock:
+            if self._tracker_state.get('running'):
+                fresh = [r for r in self._tracker_rows if 0 <= time.time()-r['verified_at'] <= tracker.RESULT_TTL]
+                if not self._tracker_state.get('connected') or self._tracker_state.get('stale'):
+                    fresh = []
+                signature = repr(fresh)
+                if signature != self._tracker_visible:
+                    self._tracker_visible = signature
+                    self.tables.update(rows_from({'buys':fresh}))
+                    self._compact = compact_buys(fresh)
+                    self.rev += 1
             return {
                 "status": self.status,
                 "busy": self.busy,
@@ -452,6 +472,7 @@ class Bridge:
                 "rev": self.rev,
                 "compact": list(self._compact),
                 "hud": self._hud.snapshot() if self._hud else {},
+                "tracker":dict(self._tracker_state),
 
             }
 
@@ -477,6 +498,8 @@ class Bridge:
     def _start_run(self, auto, minutes, budget, section):
         if self.worker and self.worker.is_alive():
             return {"ok": False, "error": "Уже идёт"}
+        with self.lock:
+            self._tracker_state = {'running':False,'phase':''}
         try:
             mins = max(1, int(minutes))
         except (TypeError, ValueError):
@@ -495,8 +518,53 @@ class Bridge:
 
     def stop_run(self):
         agent.HALT.set()
+        with self.lock:
+            self._tracker_rows = []
         self.note("Стоп")
         return {"ok": True}
+
+    def start_tracker(self, budget):
+        with self._launch_lock:
+            if self.worker and self.worker.is_alive():
+                return {'ok':False,'error':'Сначала останови текущий режим'}
+            try:
+                agent.exbo_headers()
+            except Exception:
+                error = 'Для проверки лотов нужен корректный exbo.json рядом с EXE'
+                self.note(error)
+                return {'ok':False,'error':error}
+            agent.HALT.clear()
+            with self.lock:
+                self._tracker_state = {'running':True,'connected':False,'phase':'Подключение'}
+                self._tracker_rows = []
+                self._tracker_visible = None
+            self._show({'buys':[]})
+            self.note('Лента SZ Tracker Free · проверка кандидатов через EXBO')
+            self._set_busy(True)
+            self.worker = threading.Thread(target=self._tracker_job, args=(self._budget(budget),),daemon=True)
+            self.worker.start()
+            return {'ok':True}
+
+    def _tracker_job(self, budget):
+        def on_update(rows):
+            with self.lock:
+                self._tracker_rows = list(rows)
+                self._tracker_visible = None
+        def on_state(state):
+            with self.lock:
+                self._tracker_state = state
+        final = 'Лента остановлена'
+        try:
+            tracker.TrackerFeed(agent,budget,on_update,on_state).run()
+        except Exception as error:
+            final = f'Лента: {error}'
+        finally:
+            with self.lock:
+                self._tracker_rows = []
+                self._tracker_state = dict(self._tracker_state,running=False,connected=False,phase=final)
+            self._show({'buys':[]})
+            self.note(final)
+            self._set_busy(False)
 
     def game_search(self, name):
         name = " ".join(str(name or "").split())
@@ -535,6 +603,8 @@ class Bridge:
             return {"ok": False}
         if self.worker and self.worker.is_alive():
             return {"ok": False, "error": "Уже идёт"}
+        with self.lock:
+            self._tracker_state = {'running':False,'phase':''}
         self.note(f"Онлайн, предметов {len(items)}")
         agent.HALT.clear()
         self._set_busy(True)
@@ -844,17 +914,20 @@ PAGE = r"""<!DOCTYPE html>
   <button id="closehud" aria-label="Закрыть оверлей">×</button>
 </header>
 <div id="status" role="status">ожидание</div>
+<div id="trackerinfo" role="status" style="display:none;font-size:12px;color:var(--gold);padding:4px 12px"></div>
 <div id="compact">
   <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th></tr></thead><tbody id="deals"></tbody></table></div>
   <div class="compact-actions">
-    <button class="gold" id="quickrun">Прогон</button>
+    <button class="gold" id="quicktracker">Лента SZ</button>
+    <button id="quickrun">Полный прогон</button>
     <button class="stop" id="quickstop" disabled>Стоп</button>
     <button id="quickmap">Карта</button>
   </div>
 </div>
 <div id="full">
 <div class="bar">
-  <button class="gold" id="run">Прогон</button>
+  <button class="gold" id="tracker">Лента SZ Tracker</button>
+  <button id="run">Полный прогон</button>
   <button id="auto">Автопрогон</button>
   <button id="live">Онлайн</button>
   <span>каждые</span>
@@ -1560,6 +1633,12 @@ function showLots() {
 }
 
 function wire() {
+  const startTracker = async () => {
+    const r = await pywebview.api.start_tracker($("budget").value);
+    if (r.ok) show("buys");
+  };
+  $("tracker").onclick = startTracker;
+  $("quicktracker").onclick = startTracker;
   $("run").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, $("section").value);
   $("auto").onclick = () => pywebview.api.start_run(true, $("mins").value, $("budget").value, $("section").value);
   $("live").onclick = () => pywebview.api.start_live($("budget").value);
@@ -1592,6 +1671,11 @@ function wire() {
 
 async function tick() {
   const data = await pywebview.api.poll();
+  const feed = data.tracker || {};
+  $("trackerinfo").style.display = feed.phase ? "block" : "none";
+  $("trackerinfo").textContent = feed.phase ? `SZ Tracker Free · ${feed.phase} · получено ${feed.received || 0}, проверено ${feed.checked || 0}, очередь ${feed.queue || 0}, пропущено ${feed.skipped || 0}` : "";
+  $("tracker").disabled = !!data.busy;
+  $("quicktracker").disabled = !!data.busy;
   $("status").textContent = data.status || "";
   $("log").textContent = (data.logs || []).join("\n");
   $("log").scrollTop = $("log").scrollHeight;
