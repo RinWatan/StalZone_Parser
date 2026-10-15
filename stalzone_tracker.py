@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 FEED_URL = 'wss://sztracker.ru/ws/lots?lang=ru&region=RU'
 CANDIDATE_TTL = 180
@@ -24,6 +24,8 @@ class Candidate:
     source_id: str
     received_at: float
     priority: float
+    target_price: float = 0
+    unsupported: bool = False
 
     @property
     def variant(self):
@@ -34,8 +36,11 @@ class Candidate:
         return (self.slug, self.source_id, self.cost, self.amount, self.qlt, self.ptn)
 
 
-def candidate(row, budget, now):
-    if not isinstance(row, dict) or row.get('module') or row.get('contents'):
+def candidate(row, budget, now, display_only=False):
+    if not isinstance(row, dict):
+        return None
+    unsupported = bool(row.get('module') or row.get('contents'))
+    if unsupported and not display_only:
         return None
     try:
         name = str(row.get('name') or '').strip()[:180]
@@ -58,9 +63,11 @@ def candidate(row, budget, now):
         if budget > 0 and price > budget:
             return None
         target = float(row.get('targetPrice') or 0)
-        expected = max(0, target * .95 * amount - price) if math.isfinite(target) else 0
+        # targetPrice is the resale estimate for the WHOLE lot (including stacks).
+        target = target if math.isfinite(target) and target > 0 else 0
+        expected = max(0, target * .95 - price)
         return Candidate(slug, name, amount, int(price), quality, point,
-                         str(row['uniqueId']), now, expected)
+                         str(row['uniqueId']), now, expected, target, unsupported)
     except (ValueError, TypeError, OverflowError):
         return None
 
@@ -83,7 +90,8 @@ class Candidates:
         self.prune(now)
         for row in rows[:5000]:
             self.received += 1
-            item = candidate(row, self.budget, now)
+            # Display valid source observations even when our verifier cannot use them.
+            item = candidate(row, 0, now, display_only=True)
             if item is None:
                 self.skipped += 1
                 continue
@@ -94,7 +102,8 @@ class Candidates:
             group = [c for c in self.active.get(item.slug, []) if c.identity != item.identity]
             self.active[item.slug] = (group + [item])[-32:]
             self.active.move_to_end(item.slug)
-            self.pending.add(item.slug)
+            if self.eligible(item):
+                self.pending.add(item.slug)
             while len(self.active) > self.max_items:
                 slug, _ = self.active.popitem(last=False)
                 self.pending.discard(slug)
@@ -116,28 +125,29 @@ class Candidates:
     def queued(self):
         return len(self.pending)
 
+    def eligible(self, item):
+        return not item.unsupported and (self.budget <= 0 or item.cost <= self.budget)
+
     def take(self, now, cooldowns=None):
         self.prune(now)
         cooldowns = cooldowns or {}
-        slugs = [s for s in self.pending if cooldowns.get(s, 0) <= now]
+        slugs = [s for s in self.pending if cooldowns.get(s, 0) <= now
+                 and any(self.eligible(c) for c in self.active[s])]
         if not slugs:
             return []
-        slug = max(slugs, key=lambda s: max(c.priority for c in self.active[s]))
+        slug = max(slugs, key=lambda s: max(c.priority for c in self.active[s] if self.eligible(c)))
         self.pending.discard(slug)
-        return list(self.active[slug])
-
-    def keep_alive(self, slug, now):
-        if slug in self.active:
-            self.active[slug] = [replace(c, received_at=now) for c in self.active[slug]]
-
+        return [c for c in self.active[slug] if self.eligible(c)]
 
 class Verifier:
     def __init__(self, api, clock=time.time):
         self.api, self.clock = api, clock
         self.history = OrderedDict()
+        self.outcomes = {}
 
     def check(self, candidates):
         api = self.api
+        self.outcomes = {c.identity:'Проверка EXBO прервана' for c in candidates}
         if not candidates or api.HALT.is_set():
             return []
         slug, name = candidates[0].slug, candidates[0].name
@@ -163,7 +173,12 @@ class Verifier:
             except (ValueError, TypeError):
                 continue
         if not matched:
+            self.outcomes = {c.identity:'EXBO: лот не найден среди первых 800 предложений'
+                             for c in candidates}
             return []
+        self.outcomes = {c.identity:('EXBO: не прошёл расчёт выгоды, конкуренции или ликвидности'
+                         if (c.variant,c.amount,c.cost) in matched else 'EXBO: лот не найден среди первых 800 предложений')
+                         for c in candidates}
         cached = self.history.get(slug)
         if cached is None or not 0 <= now-cached[0] < 120:
             if api.HALT.is_set():
@@ -189,10 +204,16 @@ class Verifier:
             return []
         current = self.clock()
         if not 0 <= current-now <= RESULT_TTL:
+            self.outcomes = {c.identity:'EXBO: проверка заняла более 45с, нужно обновление' for c in candidates}
             return []
         lots = [lot for lot in lots if not lot.get('endTime') or api._epoch(lot['endTime']) > current]
         matched = {(api.side_key(lot.get('additional')),int(lot['amount']),int(lot['buyoutPrice']))
                    for lot in lots} & wanted
+        for c in candidates:
+            if (c.variant,c.amount,c.cost) not in matched:
+                self.outcomes[c.identity] = 'EXBO: лот не найден или истёк'
+            elif not any(a == c.amount for a, _, _ in sales.get(c.variant, [])):
+                self.outcomes[c.identity] = 'EXBO: нет истории продаж такой пачки и варианта'
         rows = api.find_flips({'sales': sales}, slug, name, allow_single=True, lots=lots, limit=None)
         confirmed = []
         for row in rows:
@@ -201,7 +222,14 @@ class Verifier:
                 continue
             # A full last page may cut off equal-priced competing offers.
             if len(fetched) >= 800 and row['buyout'] >= int(fetched[-1].get('buyoutPrice') or 0):
+                for c in candidates:
+                    if (c.variant,c.amount,c.cost) == (variant,row['amount'],row['buyout']):
+                        self.outcomes[c.identity] = 'EXBO: неполный ценовой уровень, выгода не подтверждена'
                 continue
+            for c in candidates:
+                if (c.variant,c.amount,c.cost) == (variant,row['amount'],row['buyout']):
+                    self.outcomes[c.identity] = ('EXBO: мало данных — проверь рынок'
+                        if (row.get('confidence') or {}).get('level') == 'low' else 'EXBO: расчёт пройден; отбор по бюджету — Выкуп')
             confirmed.append(dict(row, source='SZ Tracker → EXBO', verified_at=now))
         return api._as_buys(confirmed)
 
@@ -220,6 +248,7 @@ class TrackerFeed:
         self.last_message = 0
         self.checked = 0
         self.cooldowns, self.last_check, self.results = {}, {}, {}
+        self.outcomes = {}
 
     @staticmethod
     def _connect():
@@ -238,10 +267,32 @@ class TrackerFeed:
 
     def report(self):
         with self.lock:
+            now = self.clock()
+            self.pool.prune(now)
+            active = [c for group in self.pool.active.values() for c in group]
+            identities = {c.identity for c in active}
+            self.outcomes = {k:v for k,v in self.outcomes.items() if k in identities}
+            feed_rows = []
+            for c in sorted(active, key=lambda c:c.received_at, reverse=True):
+                status, checked_at = self.outcomes.get(c.identity, ('В очереди EXBO',0))
+                if c.unsupported:
+                    status = 'Только SZ: лот с модулями/содержимым, проверка не поддерживается'
+                elif self.budget > 0 and c.cost > self.budget:
+                    status = 'Выше бюджета — только просмотр SZ'
+                elif not self.connected:
+                    status = 'SZ отключён — дождитесь подключения'
+                elif self.stale:
+                    status = 'SZ: источник сообщает об устаревших данных'
+                elif checked_at and now-checked_at > RESULT_TTL:
+                    status = 'Проверка EXBO устарела — ожидает обновления'
+                feed_rows.append({'name':c.name,'slug':c.slug,'amount':c.amount,'cost':c.cost,
+                                  'qlt':c.qlt,'ptn':c.ptn,'target_price':c.target_price,
+                                  'received_at':c.received_at,'status':status})
             state = {'phase': 'Источник сообщает об устаревших данных' if self.stale else self.phase,
                      'connected':self.connected,'stale':self.stale,'received':self.pool.received,
                      'checked':self.checked,'queue':self.pool.queued(),'skipped':self.pool.skipped,
-                     'duplicates':self.pool.duplicates,'last_message':self.last_message,'running':True}
+                     'duplicates':self.pool.duplicates,'last_message':self.last_message,'running':True,
+                     'feed_rows':feed_rows}
         if not self.stop.is_set():
             self.on_state(state)
 
@@ -313,14 +364,18 @@ class TrackerFeed:
                     batch = self.pool.take(now, self.cooldowns) if ready else []
                 if batch:
                     slug = batch[0].slug
+                    with self.lock:
+                        for c in batch:
+                            self.outcomes[c.identity] = ('Проверяется в EXBO',0)
+                    self.report()
                     try:
                         rows = self.verifier.check(batch)
+                        with self.lock:
+                            for c in batch:
+                                self.outcomes[c.identity] = (self.verifier.outcomes.get(c.identity,'EXBO: проверка завершена'),now)
                         self.checked += 1
                         self.last_check[slug] = self.clock()
                         self.results[slug] = rows
-                        if rows:
-                            with self.lock:
-                                self.pool.keep_alive(slug, self.clock())
                     except Exception as error:
                         self.results.pop(slug, None)
                         code = getattr(getattr(error, 'response', None), 'status_code', None)
@@ -328,6 +383,8 @@ class TrackerFeed:
                             raise RuntimeError('EXBO отклонил API-ключ') from None
                         self.cooldowns[slug] = self.clock() + (300 if code in (400, 404) else 30)
                         with self.lock:
+                            for c in batch:
+                                self.outcomes[c.identity] = (f'EXBO: ошибка {code or type(error).__name__}, повтор позже',self.clock())
                             if slug in self.pool.active:
                                 self.pool.pending.add(slug)
                     with self.lock:

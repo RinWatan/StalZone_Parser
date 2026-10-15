@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import time
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,6 +15,7 @@ import stalzone_gui as gui
 root=Path(__file__).resolve().parents[1]
 temp=tempfile.TemporaryDirectory();agent.DIR=Path(temp.name)
 bridge=gui.Bridge(); mode=['full']; created=[]
+allow_verify=threading.Event()
 bridge._hud=SimpleNamespace(snapshot=lambda:{'mode':mode[0],'hotkey':True})
 
 class Feed:
@@ -21,7 +23,13 @@ class Feed:
         self.update,self.status=update,status
         created.append(budget)
     def run(self):
-        self.status({'running':True,'connected':True,'phase':'Подключена','received':40,'checked':2,'queue':3})
+        source_rows=[{'name':'Проверочный предмет','cost':70,'amount':1,'qlt':None,'ptn':None,
+                      'target_price':100,'received_at':time.time(),'status':'В очереди EXBO'},
+                     {'name':'Отклонённый лот','cost':140,'amount':2,'qlt':None,'ptn':None,
+                      'target_price':200,'received_at':time.time(),'status':'EXBO: лот не найден'}]
+        self.status({'running':True,'connected':True,'phase':'Подключена','received':40,'checked':2,'queue':3,
+                     'feed_rows':source_rows})
+        allow_verify.wait(10)
         self.update(agent._as_buys([{'name':'Проверочный предмет','slug':'abc12','buyout':70,
             'amount':1,'unit':70,'med':100,'profit':25,'count':1,'required_copies':1,'per_h':2,
             'confidence':{'level':'high','detail':'Высокая · 12 продаж'},
@@ -46,10 +54,17 @@ def check():
         window.evaluate_js("document.getElementById('budget').value='5000'; document.getElementById('tracker').click(); null")
         wait("document.getElementById('trackerinfo').textContent.includes('получено 40')")
         wait("document.getElementById('deals').textContent.includes('Проверочный предмет')")
+        assert window.evaluate_js("document.getElementById('v-feed').classList.contains('on')")
+        assert window.evaluate_js("state.tables.feed.length === 2 && state.tables.feed[1].cells.includes('EXBO: лот не найден')")
+        assert window.evaluate_js("document.getElementById('deals').textContent.includes('В очереди EXBO')")
+        assert not bridge.poll()['tables']['buys']
+        allow_verify.set()
+        wait("state.tables.buys && state.tables.buys.length === 1")
         assert window.evaluate_js("state.tables.buys[0].cells[state.tables.buys[0].cells.length-1].includes('SZ Tracker → EXBO')")
         assert window.evaluate_js("document.getElementById('run').disabled && document.getElementById('tracker').disabled && !document.getElementById('stop').disabled")
         catalogue.assert_not_called()
         report['full_button_and_verified_source']=True
+        report['pending_visible_and_rejected_not_hidden']=True
         window.evaluate_js("document.getElementById('stop').click(); null")
         bridge.worker.join(2)
         assert not bridge.worker.is_alive()

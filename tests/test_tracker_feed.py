@@ -17,6 +17,14 @@ def offer(**extra):
 
 
 class CandidateTests(unittest.TestCase):
+    def test_target_price_is_for_whole_stack_and_does_not_inflate_priority(self):
+        q=tracker.Candidates(15000000)
+        q.ingest({'type':'snapshot','data':[
+            offer(itemId='4npn',name='Теломераза',amount=10,cost=600000,targetPrice=666000),
+            offer(itemId='other',uniqueId=124,cost=100000,targetPrice=200000)]},10)
+        self.assertAlmostEqual(q.active['4npn'][0].priority,32700)
+        self.assertEqual(q.take(10)[0].slug,'other')
+
     def test_normalizes_price_quantity_and_known_alias(self):
         c=tracker.candidate(offer(itemId='HJC257QV5D',name='Протоартефакт',qlt=2),1000,10)
         self.assertEqual(c.slug,'dm6l2')
@@ -62,6 +70,13 @@ class VerifyTests(unittest.TestCase):
         with patch.object(agent,'live_lots',return_value=[]),patch.object(agent,'get_json') as get:
             self.assertEqual(self.v.check([self.c]),[])
             get.assert_not_called()
+        self.assertIn('не найден',self.v.outcomes[self.c.identity])
+
+    def test_matched_but_unprofitable_offer_has_explicit_outcome(self):
+        raw={'prices':[dict(r,price=70) for r in self.raw['prices']]}
+        with patch.object(agent,'live_lots',return_value=self.lots),patch.object(agent,'get_json',return_value=raw):
+            self.assertEqual(self.v.check([self.c]),[])
+        self.assertIn('расчёт',self.v.outcomes[self.c.identity])
 
     def test_current_exbo_offer_required_and_tracker_target_not_used_for_profit(self):
         c=tracker.candidate(offer(targetPrice=10000000),1000,self.now)
@@ -126,6 +141,48 @@ def verified_row(now):
 class EngineTests(unittest.TestCase):
     def setUp(self): agent.HALT.clear()
     def tearDown(self): agent.HALT.clear()
+    def test_incoming_rows_visible_before_check_and_rejection_does_not_hide_them(self):
+        states=[]
+        e=tracker.TrackerFeed(agent,1000,lambda _:None,states.append,clock=lambda:100)
+        e.connected=True
+        e.ingest({'type':'snapshot','data':[offer(amount=2,cost=140,targetPrice=200)]})
+        e.report()
+        row=states[-1]['feed_rows'][0]
+        self.assertEqual((row['cost'],row['amount'],row['target_price']),(140,2,200))
+        self.assertEqual(row['status'],'В очереди EXBO')
+        identity=e.pool.active['abc12'][0].identity
+        e.outcomes[identity]=('EXBO: лот не найден',100)
+        e.report()
+        self.assertIn('не найден',states[-1]['feed_rows'][0]['status'])
+        e.connected=False
+        e.report()
+        self.assertIn('отключён',states[-1]['feed_rows'][0]['status'])
+
+    def test_over_budget_and_complex_lots_remain_visible_without_entering_verification_queue(self):
+        states=[]
+        e=tracker.TrackerFeed(agent,100,lambda _:None,states.append,clock=lambda:100)
+        e.connected=True
+        e.ingest({'type':'snapshot','data':[offer(cost=200),offer(uniqueId=124,module={'id':'mod'})]})
+        e.report()
+        self.assertEqual(len(states[-1]['feed_rows']),2)
+        self.assertEqual(e.pool.queued(),0)
+        self.assertTrue(any('бюджета' in r['status'] for r in states[-1]['feed_rows']))
+        self.assertTrue(any('модул' in r['status'] for r in states[-1]['feed_rows']))
+
+    def test_gui_feed_is_separate_from_verified_buys(self):
+        from stalzone_gui import Bridge
+        bridge=Bridge()
+        now=time.time()
+        bridge._tracker_state={'running':True,'connected':True,'feed_rows':[
+            {'name':'Новый лот','cost':600000,'amount':10,'qlt':None,'ptn':None,
+             'target_price':666000,'received_at':now,'status':'В очереди EXBO'}]}
+        result=bridge.poll()
+        self.assertFalse(result['tables']['buys'])
+        self.assertEqual(result['tables']['feed'][0]['cells'][0],'Новый лот')
+        self.assertEqual(result['feed_compact'][0]['gain'],'В очереди EXBO')
+        self.assertNotIn('ВЫКУПИТЬ',str(result['tables']['feed']))
+        bridge._tracker_state['running']=False
+        self.assertEqual(bridge.poll()['tables']['feed'],[])
     def test_expiry_disconnect_and_source_stale_hide_rows(self):
         e=tracker.TrackerFeed(agent,1000,lambda _:None,lambda _:None)
         now=time.time()

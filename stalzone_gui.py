@@ -24,6 +24,7 @@ SECTIONS = [
     ("Протоартефакты", "protos"),
 ]
 TABLES = {
+    "feed": ["Предмет", "Редкость", "Точка", "Штук", "Цена всей пачки SZ", "За штуку SZ", "Оценка продажи пачки SZ (не EXBO)", "Статус EXBO", "Получено"],
     "buys": ["Предмет", "Редкость", "Точка", "Лоты", "Купить за", "Выставить пачку", "После 5%", "Плюс", "Рентабельность", "В час", "Плюс в час", "Если купить сейчас", "Надёжность оценки"],
     "farm": ["Предмет", "Продают", "Продавать от", "Пачка", "Решение"],
     "arsenal": ["Предмет", "Продают", "Продавать от", "Решение"],
@@ -84,6 +85,13 @@ def _sell(rows, pack=False):
 
 def rows_from(data):
     tables = {}
+    if "feed" in data:
+        tables['feed'] = [{'cells':[
+            r['name'], agent.QLT[r['qlt']] if r.get('qlt') is not None and r['qlt'] < len(agent.QLT) else '—',
+            f"+{r['ptn']}" if r.get('ptn') is not None else '—', r['amount'],
+            money(r['cost']), money(r['cost']/r['amount']), money(r.get('target_price') or 0),
+            r['status'], time.strftime('%H:%M:%S',time.localtime(r['received_at']))],
+            'tag':'skip'} for r in data.get('feed') or []]
     if "buys" in data:
         buys = []
         for r in data.get("buys") or []:
@@ -179,6 +187,7 @@ class Bridge:
         self._tracker_state = {'running':False,'phase':''}
         self._tracker_rows = []
         self._tracker_visible = None
+        self._tracker_feed_visible = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -454,7 +463,15 @@ class Bridge:
 
     def poll(self):
         with self.lock:
+            feed_rows = []
             if self._tracker_state.get('running'):
+                feed_rows = [r for r in self._tracker_state.get('feed_rows',[])
+                             if 0 <= time.time()-r['received_at'] <= tracker.CANDIDATE_TTL]
+                feed_signature = repr(feed_rows)
+                if feed_signature != self._tracker_feed_visible:
+                    self._tracker_feed_visible = feed_signature
+                    self.tables.update(rows_from({'feed':feed_rows}))
+                    self.rev += 1
                 fresh = [r for r in self._tracker_rows if 0 <= time.time()-r['verified_at'] <= tracker.RESULT_TTL]
                 if not self._tracker_state.get('connected') or self._tracker_state.get('stale'):
                     fresh = []
@@ -464,6 +481,10 @@ class Bridge:
                     self.tables.update(rows_from({'buys':fresh}))
                     self._compact = compact_buys(fresh)
                     self.rev += 1
+            elif self.tables.get('feed'):
+                self.tables['feed'] = []
+                self._tracker_feed_visible = None
+                self.rev += 1
             return {
                 "status": self.status,
                 "busy": self.busy,
@@ -471,6 +492,8 @@ class Bridge:
                 "tables": self.tables,
                 "rev": self.rev,
                 "compact": list(self._compact),
+                "feed_compact": [{'name':r['name'],'price':f"{money(r['cost'])} / {r['amount']} шт.",
+                                  'gain':r['status']} for r in feed_rows[:5]],
                 "hud": self._hud.snapshot() if self._hud else {},
                 "tracker":dict(self._tracker_state),
 
@@ -865,6 +888,7 @@ PAGE = r"""<!DOCTYPE html>
   #compact th, #compact td { padding: 8px; font-size: 12px; }
   #compact td:first-child { white-space: normal; }
   #compact td:last-child { color: var(--buy); }
+  body.tracker-active #compact td:last-child { color: var(--dim); font-size: 11px; }
   .compact-actions { display: flex; gap: 6px; }
   #hudhint { font-size: 11px; color: var(--dim); flex-shrink: 0; padding: 6px 12px; border-top: 1px solid var(--line); }
   button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -916,7 +940,7 @@ PAGE = r"""<!DOCTYPE html>
 <div id="status" role="status">ожидание</div>
 <div id="trackerinfo" role="status" style="display:none;font-size:12px;color:var(--gold);padding:4px 12px"></div>
 <div id="compact">
-  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th></tr></thead><tbody id="deals"></tbody></table></div>
+  <div class="sheet"><table><thead><tr><th>Предмет</th><th id="compactprice">Купить и продать</th><th id="compactgain">Плюс</th></tr></thead><tbody id="deals"></tbody></table></div>
   <div class="compact-actions">
     <button class="gold" id="quicktracker">Лента SZ</button>
     <button id="quickrun">Полный прогон</button>
@@ -944,8 +968,8 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 <div id="hudhint">F10 — управление оверлеем</div>
 <script>
-const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
-const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
+const TAB_ORDER = ["buys","feed","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
+const TAB_NAME = {feed:"Лента SZ", buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
 const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
 const $ = (id) => document.getElementById(id);
 
@@ -1635,7 +1659,7 @@ function showLots() {
 function wire() {
   const startTracker = async () => {
     const r = await pywebview.api.start_tracker($("budget").value);
-    if (r.ok) show("buys");
+    if (r.ok) show("feed");
   };
   $("tracker").onclick = startTracker;
   $("quicktracker").onclick = startTracker;
@@ -1672,8 +1696,9 @@ function wire() {
 async function tick() {
   const data = await pywebview.api.poll();
   const feed = data.tracker || {};
+  document.body.classList.toggle("tracker-active", !!feed.running);
   $("trackerinfo").style.display = feed.phase ? "block" : "none";
-  $("trackerinfo").textContent = feed.phase ? `SZ Tracker Free · ${feed.phase} · получено ${feed.received || 0}, проверено ${feed.checked || 0}, очередь ${feed.queue || 0}, пропущено ${feed.skipped || 0}` : "";
+  $("trackerinfo").textContent = feed.phase ? `SZ Tracker Free · ${feed.phase} · получено ${feed.received || 0}, проверено ${feed.checked || 0}, очередь ${feed.queue || 0}, пропущено ${feed.skipped || 0} · Лента SZ — оценки сайта; рекомендации EXBO — вкладка Выкуп` : "";
   $("tracker").disabled = !!data.busy;
   $("quicktracker").disabled = !!data.busy;
   $("status").textContent = data.status || "";
@@ -1691,8 +1716,11 @@ async function tick() {
   $("hudhint").textContent = !hud.hotkey ? "Горячая клавиша занята другой копией — закройте её и перезапустите оверлей" :
     (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
     (hud.game ? "" : " · окно игры не найдено");
-  $("deals").innerHTML = (data.compact || []).map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td></tr>`).join("") ||
-    '<tr><td colspan="3">Прогон найдёт подходящие лоты</td></tr>';
+  $("compactprice").textContent = feed.running ? "Пачка / штук · SZ" : "Купить и продать";
+  $("compactgain").textContent = feed.running ? "Проверка EXBO" : "Плюс";
+  const compactRows = feed.running ? data.feed_compact : data.compact;
+  $("deals").innerHTML = (compactRows || []).map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td></tr>`).join("") ||
+    `<tr><td colspan="3">${feed.running ? 'Ожидание лотов SZ Tracker' : 'Прогон найдёт подходящие лоты'}</td></tr>`;
   $("deals").querySelectorAll("tr").forEach(tr => {
     const name = tr.cells[0] ? tr.cells[0].textContent : "";
     if (name && tr.cells.length > 1) tr.onclick = () => pywebview.api.game_search(name);
