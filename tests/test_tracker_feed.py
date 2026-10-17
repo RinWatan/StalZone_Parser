@@ -50,7 +50,7 @@ class CandidateTests(unittest.TestCase):
     def test_expired_candidates_and_unknown_messages_do_not_trigger_checks(self):
         q=tracker.Candidates(1000)
         q.ingest({'type':'snapshot','data':[offer()]},10)
-        self.assertFalse(q.take(200))
+        self.assertFalse(q.take(11+tracker.CANDIDATE_TTL))
         q.ingest({'type':'custom_lots_update','data':[offer()]},200)
         self.assertEqual(q.queued(),0)
 

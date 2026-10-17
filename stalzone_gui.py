@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Окно агента. Расчёты те же, интерфейс на системном браузере Windows."""
 import json
+import math
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ SECTIONS = [
     ("Протоартефакты", "protos"),
 ]
 TABLES = {
+    "resale": ["Предмет", "Редкость", "Точка", "Штук", "Цена лота SZ", "Продать пачку ≈ SZ", "Плюс после 5% ≈ SZ", "Рентаб. ≈", "Продаж/сутки SZ", "Период / сделок SZ", "Наличие EXBO / оценка"],
     "feed": ["Предмет", "Редкость", "Точка", "Штук", "Цена всей пачки SZ", "За штуку SZ", "Оценка продажи пачки SZ (не EXBO)", "Статус EXBO", "Получено"],
     "buys": ["Предмет", "Редкость", "Точка", "Лоты", "Купить за", "Выставить пачку", "После 5%", "Плюс", "Рентабельность", "В час", "Плюс в час", "Если купить сейчас", "Надёжность оценки"],
     "farm": ["Предмет", "Продают", "Продавать от", "Пачка", "Решение"],
@@ -85,6 +87,15 @@ def _sell(rows, pack=False):
 
 def rows_from(data):
     tables = {}
+    if 'resale' in data:
+        tables['resale'] = [{'cells':[
+            r['name'], (agent.QLT[r['qlt']] if r.get('qlt') is not None and 0 <= r['qlt'] < len(agent.QLT) else '—') +
+            (f" · {r['quality_label']}" if r.get('quality_label') else ''),
+            f"+{r['ptn']}" if r.get('ptn') is not None else '—', r['amount'], money(r['cost']),
+            money(r['target_price']), money(r['estimated_profit']), f"{r['estimated_profit']/r['cost']*100:.1f}%",
+            f"{r['sales_per_day']:.1f}" if r.get('sales_per_day') is not None else 'нет данных',
+            f"{r.get('estimate_period') or 'поток'} / {r.get('estimate_samples') or '—'}",
+            r.get('availability') or 'Не проверено'], 'tag':'skip'} for r in data.get('resale') or []]
     if "feed" in data:
         tables['feed'] = [{'cells':[
             r['name'], agent.QLT[r['qlt']] if r.get('qlt') is not None and r['qlt'] < len(agent.QLT) else '—',
@@ -161,6 +172,30 @@ def compact_buys(rows):
              'copies':r['copies']} for r in deals[:5]]
 
 
+def resale_candidates(rows, budget, filters, now):
+    """SZ estimates are independent of the legacy EXBO fast-flip gate."""
+    out = []
+    for source in rows:
+        r = dict(source)
+        if r.get('unsupported') or r.get('available') is False:
+            continue
+        if not 0 <= now-r['received_at'] <= tracker.CANDIDATE_TTL:
+            continue
+        if budget > 0 and r['cost'] > budget:
+            continue
+        profit = math.floor(r['target_price']*.95)-r['cost']
+        if profit <= 0 or profit < filters['min_profit'] or profit/r['cost']*100 < filters['min_roi']:
+            continue
+        r['estimated_profit'] = profit
+        checked_at = r.get('availability_at') or 0
+        if checked_at and now-checked_at > tracker.RESULT_TTL:
+            r['availability'] = 'Наличие нужно перепроверить'
+        if r.get('qlt') is not None:
+            r['availability'] = (r.get('availability') or 'Не проверено') + '; сверь характеристики арта'
+        out.append(r)
+    return sorted(out,key=lambda r:(r['estimated_profit'],r['estimated_profit']/r['cost']),reverse=True)[:100]
+
+
 class Bridge:
     def __init__(self):
         self.lock = threading.Lock()
@@ -188,6 +223,14 @@ class Bridge:
         self._tracker_rows = []
         self._tracker_visible = None
         self._tracker_feed_visible = None
+        saved_filters = self._read_json('tracker_filters.json')
+        self._tracker_filters = {'min_profit':100000,'min_roi':10}
+        if isinstance(saved_filters,dict):
+            for key in self._tracker_filters:
+                value = saved_filters.get(key)
+                if isinstance(value,(int,float)) and math.isfinite(value) and value >= 0:
+                    self._tracker_filters[key] = value
+        self._tracker_resale_visible = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -459,11 +502,28 @@ class Bridge:
             "cats": [{"key": key, "title": title} for key, title in agent.AUCTION_CATS],
             "qlt": ["Все", *agent.QLT],
             "columns": TABLES,
+            "tracker_filters":dict(self._tracker_filters),
         }
+
+    def set_tracker_filters(self, min_profit, min_roi):
+        try:
+            settings = {'min_profit':agent.parse_money(min_profit),'min_roi':float(min_roi)}
+            if any(not math.isfinite(v) or v < 0 for v in settings.values()):
+                raise ValueError()
+        except (ValueError,TypeError,OverflowError):
+            return {'ok':False,'error':'Нужны неотрицательные числа'}
+        with self.lock:
+            self._tracker_filters = settings
+        try:
+            (agent.DIR/'tracker_filters.json').write_text(json.dumps(settings),encoding='utf-8')
+        except OSError:
+            pass
+        return {'ok':True}
 
     def poll(self):
         with self.lock:
             feed_rows = []
+            resale = []
             if self._tracker_state.get('running'):
                 feed_rows = [r for r in self._tracker_state.get('feed_rows',[])
                              if 0 <= time.time()-r['received_at'] <= tracker.CANDIDATE_TTL]
@@ -471,6 +531,13 @@ class Bridge:
                 if feed_signature != self._tracker_feed_visible:
                     self._tracker_feed_visible = feed_signature
                     self.tables.update(rows_from({'feed':feed_rows}))
+                    self.rev += 1
+                if self._tracker_state.get('connected') and not self._tracker_state.get('stale'):
+                    resale = resale_candidates(feed_rows,self._tracker_state.get('budget',0),self._tracker_filters,time.time())
+                resale_signature = repr(resale)
+                if resale_signature != self._tracker_resale_visible:
+                    self._tracker_resale_visible = resale_signature
+                    self.tables.update(rows_from({'resale':resale}))
                     self.rev += 1
                 fresh = [r for r in self._tracker_rows if 0 <= time.time()-r['verified_at'] <= tracker.RESULT_TTL]
                 if not self._tracker_state.get('connected') or self._tracker_state.get('stale'):
@@ -481,9 +548,11 @@ class Bridge:
                     self.tables.update(rows_from({'buys':fresh}))
                     self._compact = compact_buys(fresh)
                     self.rev += 1
-            elif self.tables.get('feed'):
+            elif self.tables.get('feed') or self.tables.get('resale'):
                 self.tables['feed'] = []
+                self.tables['resale'] = []
                 self._tracker_feed_visible = None
+                self._tracker_resale_visible = None
                 self.rev += 1
             return {
                 "status": self.status,
@@ -494,6 +563,8 @@ class Bridge:
                 "compact": list(self._compact),
                 "feed_compact": [{'name':r['name'],'price':f"{money(r['cost'])} / {r['amount']} шт.",
                                   'gain':r['status']} for r in feed_rows[:5]],
+                "resale_compact": [{'name':r['name'],'price':f"{money(r['cost'])} / {r['amount']} шт.",
+                                    'gain':f"≈{money(r['estimated_profit'])} · SZ"} for r in resale[:5]],
                 "hud": self._hud.snapshot() if self._hud else {},
                 "tracker":dict(self._tracker_state),
 
@@ -562,7 +633,7 @@ class Bridge:
                 self._tracker_rows = []
                 self._tracker_visible = None
             self._show({'buys':[]})
-            self.note('Лента SZ Tracker Free · проверка кандидатов через EXBO')
+            self.note('Перепродажа SZ Free · оценка median/7д с расширением для редких; EXBO проверяет наличие')
             self._set_busy(True)
             self.worker = threading.Thread(target=self._tracker_job, args=(self._budget(budget),),daemon=True)
             self.worker.start()
@@ -942,7 +1013,7 @@ PAGE = r"""<!DOCTYPE html>
 <div id="compact">
   <div class="sheet"><table><thead><tr><th>Предмет</th><th id="compactprice">Купить и продать</th><th id="compactgain">Плюс</th></tr></thead><tbody id="deals"></tbody></table></div>
   <div class="compact-actions">
-    <button class="gold" id="quicktracker">Лента SZ</button>
+    <button class="gold" id="quicktracker">Перепродажа SZ</button>
     <button id="quickrun">Полный прогон</button>
     <button class="stop" id="quickstop" disabled>Стоп</button>
     <button id="quickmap">Карта</button>
@@ -950,7 +1021,7 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 <div id="full">
 <div class="bar">
-  <button class="gold" id="tracker">Лента SZ Tracker</button>
+  <button class="gold" id="tracker">Перепродажа SZ</button>
   <button id="run">Полный прогон</button>
   <button id="auto">Автопрогон</button>
   <button id="live">Онлайн</button>
@@ -962,14 +1033,19 @@ PAGE = r"""<!DOCTYPE html>
   <button class="stop" id="stop" disabled>Стоп</button>
   <select id="section"></select>
 </div>
+<div class="tools" id="resalefilters" style="font-size:12px">
+  <span>Оценки SZ: плюс от</span><input id="szprofit" value="100000" style="width:100px"/>
+  <span>руб. · рентабельность от</span><input id="szroi" value="10" style="width:60px"/><span>%</span>
+  <button id="szapply">Применить</button><span id="szfilterstatus">Медиана 7д; для редких — расширение периода. Новые лоты накапливаются с запуска; прежние карточки браузера не импортируются.</span>
+</div>
 <div class="tabs" id="tabs"></div>
 <main id="main"></main>
 <div id="log"></div>
 </div>
 <div id="hudhint">F10 — управление оверлеем</div>
 <script>
-const TAB_ORDER = ["buys","feed","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
-const TAB_NAME = {feed:"Лента SZ", buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
+const TAB_ORDER = ["buys","resale","feed","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
+const TAB_NAME = {resale:"Перепродажа SZ", feed:"Диагностика SZ", buys:"Выкуп EXBO", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
 const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
 const $ = (id) => document.getElementById(id);
 
@@ -1001,7 +1077,8 @@ function paint(key) {
     });
   }
   const head = cols.map((c, i) => `<th data-i="${i}">${c}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
-  const body = rows.map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
+  const body = rows.map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("") ||
+    (key === "resale" ? `<tr data-empty><td colspan="${cols.length}">Нет предложений по текущим порогам и бюджету. Запустите «Перепродажа SZ», дождитесь новых лотов или измените пороги.</td></tr>` : "");
   box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
   box.querySelectorAll("th").forEach(th => th.onclick = () => {
     const i = Number(th.dataset.i);
@@ -1009,7 +1086,7 @@ function paint(key) {
     state.sort[key] = {i, desc: prev && prev.i === i ? !prev.desc : true};
     paint(key);
   });
-  box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => pywebview.api.game_search(tr.cells[0].textContent));
+  box.querySelectorAll("tbody tr:not([data-empty])").forEach(tr => tr.onclick = () => pywebview.api.game_search(tr.cells[0].textContent));
 }
 
 function build() {
@@ -1657,9 +1734,13 @@ function showLots() {
 }
 
 function wire() {
+  $("szapply").onclick = async () => {
+    const r = await pywebview.api.set_tracker_filters($("szprofit").value, $("szroi").value);
+    $("szfilterstatus").textContent = r.ok ? "Пороги применены · цены и плюс — оценки SZ, не подтверждённая прибыль EXBO" : r.error;
+  };
   const startTracker = async () => {
     const r = await pywebview.api.start_tracker($("budget").value);
-    if (r.ok) show("feed");
+    if (r.ok) show("resale");
   };
   $("tracker").onclick = startTracker;
   $("quicktracker").onclick = startTracker;
@@ -1698,7 +1779,7 @@ async function tick() {
   const feed = data.tracker || {};
   document.body.classList.toggle("tracker-active", !!feed.running);
   $("trackerinfo").style.display = feed.phase ? "block" : "none";
-  $("trackerinfo").textContent = feed.phase ? `SZ Tracker Free · ${feed.phase} · получено ${feed.received || 0}, проверено ${feed.checked || 0}, очередь ${feed.queue || 0}, пропущено ${feed.skipped || 0} · Лента SZ — оценки сайта; рекомендации EXBO — вкладка Выкуп` : "";
+  $("trackerinfo").textContent = feed.phase ? `SZ Tracker Free · ${feed.phase} · получено ${feed.received || 0}, проверено ${feed.checked || 0}, очередь ${feed.queue || 0}, пропущено ${feed.skipped || 0} · Перепродажа — оценки SZ; EXBO проверяет наличие, а не цену будущей продажи` : "";
   $("tracker").disabled = !!data.busy;
   $("quicktracker").disabled = !!data.busy;
   $("status").textContent = data.status || "";
@@ -1717,10 +1798,10 @@ async function tick() {
     (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
     (hud.game ? "" : " · окно игры не найдено");
   $("compactprice").textContent = feed.running ? "Пачка / штук · SZ" : "Купить и продать";
-  $("compactgain").textContent = feed.running ? "Проверка EXBO" : "Плюс";
-  const compactRows = feed.running ? data.feed_compact : data.compact;
+  $("compactgain").textContent = feed.running ? "Плюс ≈ SZ" : "Плюс";
+  const compactRows = feed.running ? data.resale_compact : data.compact;
   $("deals").innerHTML = (compactRows || []).map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td></tr>`).join("") ||
-    `<tr><td colspan="3">${feed.running ? 'Ожидание лотов SZ Tracker' : 'Прогон найдёт подходящие лоты'}</td></tr>`;
+    `<tr><td colspan="3">${feed.running ? 'Нет кандидатов по порогам SZ; ожидание новых лотов' : 'Прогон найдёт подходящие лоты'}</td></tr>`;
   $("deals").querySelectorAll("tr").forEach(tr => {
     const name = tr.cells[0] ? tr.cells[0].textContent : "";
     if (name && tr.cells.length > 1) tr.onclick = () => pywebview.api.game_search(name);
@@ -1738,6 +1819,8 @@ window.addEventListener("pywebviewready", async () => {
   state.columns = boot.columns;
   $("section").innerHTML = boot.sections.map(s => `<option>${esc(s)}</option>`).join("");
   $("budget").value = boot.budget;
+  $("szprofit").value = (boot.tracker_filters || {}).min_profit ?? 100000;
+  $("szroi").value = (boot.tracker_filters || {}).min_roi ?? 10;
   build();
   $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");
   $("lq").innerHTML = boot.qlt.map(s => `<option>${esc(s)}</option>`).join("");

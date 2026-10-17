@@ -1,4 +1,4 @@
-"""Public Free feed supplies candidates; only EXBO supplies verified deals."""
+"""Free SZ estimates and independent EXBO availability/strict deal checks."""
 import json
 import math
 import re
@@ -8,9 +8,37 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 FEED_URL = 'wss://sztracker.ru/ws/lots?lang=ru&region=RU'
-CANDIDATE_TTL = 180
+CANDIDATE_TTL = 12*3600
 RESULT_TTL = 45
 REFRESH_AFTER = 20
+
+
+def _number(value, default=0):
+    try:
+        value = float(value)
+        return value if math.isfinite(value) and value >= 0 else default
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def estimate(row, amount):
+    """Match the site's default median/7d, expanding sparse histories."""
+    metrics = row.get('metrics')
+    if isinstance(metrics, dict):
+        periods = metrics.get('periods') or {}
+        if not isinstance(periods, dict):
+            periods = {}
+        for days in (7,14,30,90):
+            sample = periods.get(f'{days}d')
+            if isinstance(sample, dict) and _number(sample.get('sampleSize')) >= 3:
+                median = _number(sample.get('median'))
+                if median > 0:
+                    return median*amount, f'{days}д', int(_number(sample.get('sampleSize')))
+                break
+        median = _number(metrics.get('median'))
+        if median > 0:
+            return median*amount, 'общая статистика', int(_number(metrics.get('sampleSize')))
+    return _number(row.get('targetPrice')), 'готовая оценка потока', 0
 
 
 @dataclass(frozen=True)
@@ -26,6 +54,10 @@ class Candidate:
     priority: float
     target_price: float = 0
     unsupported: bool = False
+    estimate_period: str = ''
+    estimate_samples: int = 0
+    sales_per_day: float | None = None
+    quality_label: str = ''
 
     @property
     def variant(self):
@@ -62,12 +94,16 @@ def candidate(row, budget, now, display_only=False):
             return None
         if budget > 0 and price > budget:
             return None
-        target = float(row.get('targetPrice') or 0)
-        # targetPrice is the resale estimate for the WHOLE lot (including stacks).
-        target = target if math.isfinite(target) and target > 0 else 0
-        expected = max(0, target * .95 - price)
+        target, period, samples = estimate(row, amount)
+        if not math.isfinite(target):
+            return None
+        expected = max(0, math.floor(target * .95) - price)
+        sales_per_day = _number(row.get('salesPerDay30d'), None)
+        info = row.get('qltInfo')
+        label = str(info.get('labelPercentQlt') or '')[:80] if isinstance(info,dict) else ''
         return Candidate(slug, name, amount, int(price), quality, point,
-                         str(row['uniqueId']), now, expected, target, unsupported)
+                         str(row['uniqueId']), now, expected, target, unsupported,
+                         period, samples, sales_per_day, label)
     except (ValueError, TypeError, OverflowError):
         return None
 
@@ -79,6 +115,7 @@ class Candidates:
         self.active = OrderedDict()
         self.pending = set()
         self.seen = OrderedDict()
+        self.unavailable = set()
         self.received = self.skipped = self.duplicates = 0
 
     def ingest(self, message, now):
@@ -95,17 +132,20 @@ class Candidates:
             if item is None:
                 self.skipped += 1
                 continue
-            if item.identity in self.seen:
+            if item.identity in self.seen or any(c.identity == item.identity for c in self.active.get(item.slug,[])):
                 self.duplicates += 1
                 continue
             self.seen[item.identity] = now
             group = [c for c in self.active.get(item.slug, []) if c.identity != item.identity]
-            self.active[item.slug] = (group + [item])[-32:]
+            self.active[item.slug] = sorted(group+[item], key=lambda c:(
+                self.rank(c),c.received_at), reverse=True)[:32]
             self.active.move_to_end(item.slug)
             if self.eligible(item):
                 self.pending.add(item.slug)
             while len(self.active) > self.max_items:
-                slug, _ = self.active.popitem(last=False)
+                slug = min(self.active,key=lambda s:max(
+                    self.rank(c) for c in self.active[s]))
+                self.active.pop(slug)
                 self.pending.discard(slug)
                 self.skipped += 1
             while len(self.seen) > 10000:
@@ -121,12 +161,16 @@ class Candidates:
                 self.pending.discard(slug)
         while self.seen and now-next(iter(self.seen.values())) > 300:
             self.seen.popitem(last=False)
+        self.unavailable.intersection_update(c.identity for group in self.active.values() for c in group)
 
     def queued(self):
         return len(self.pending)
 
     def eligible(self, item):
         return not item.unsupported and (self.budget <= 0 or item.cost <= self.budget)
+
+    def rank(self, item):
+        return item.priority if self.eligible(item) and item.identity not in self.unavailable else 0
 
     def take(self, now, cooldowns=None):
         self.prune(now)
@@ -135,7 +179,7 @@ class Candidates:
                  and any(self.eligible(c) for c in self.active[s])]
         if not slugs:
             return []
-        slug = max(slugs, key=lambda s: max(c.priority for c in self.active[s] if self.eligible(c)))
+        slug = max(slugs, key=lambda s: max(self.rank(c) for c in self.active[s] if self.eligible(c)))
         self.pending.discard(slug)
         return [c for c in self.active[slug] if self.eligible(c)]
 
@@ -144,10 +188,12 @@ class Verifier:
         self.api, self.clock = api, clock
         self.history = OrderedDict()
         self.outcomes = {}
+        self.availability = {}
 
     def check(self, candidates):
         api = self.api
         self.outcomes = {c.identity:'Проверка EXBO прервана' for c in candidates}
+        self.availability = {c.identity:None for c in candidates}
         if not candidates or api.HALT.is_set():
             return []
         slug, name = candidates[0].slug, candidates[0].name
@@ -172,6 +218,8 @@ class Verifier:
                     matched.add(signature)
             except (ValueError, TypeError):
                 continue
+        self.availability = {c.identity:(True if (c.variant,c.amount,c.cost) in matched
+                                        else None if len(fetched)>=800 else False) for c in candidates}
         if not matched:
             self.outcomes = {c.identity:'EXBO: лот не найден среди первых 800 предложений'
                              for c in candidates}
@@ -209,6 +257,8 @@ class Verifier:
         lots = [lot for lot in lots if not lot.get('endTime') or api._epoch(lot['endTime']) > current]
         matched = {(api.side_key(lot.get('additional')),int(lot['amount']),int(lot['buyoutPrice']))
                    for lot in lots} & wanted
+        self.availability = {c.identity:(True if (c.variant,c.amount,c.cost) in matched
+                                        else None if len(fetched)>=800 else False) for c in candidates}
         for c in candidates:
             if (c.variant,c.amount,c.cost) not in matched:
                 self.outcomes[c.identity] = 'EXBO: лот не найден или истёк'
@@ -249,6 +299,7 @@ class TrackerFeed:
         self.checked = 0
         self.cooldowns, self.last_check, self.results = {}, {}, {}
         self.outcomes = {}
+        self.availability = {}
 
     @staticmethod
     def _connect():
@@ -272,6 +323,7 @@ class TrackerFeed:
             active = [c for group in self.pool.active.values() for c in group]
             identities = {c.identity for c in active}
             self.outcomes = {k:v for k,v in self.outcomes.items() if k in identities}
+            self.availability = {k:v for k,v in self.availability.items() if k in identities}
             feed_rows = []
             for c in sorted(active, key=lambda c:c.received_at, reverse=True):
                 status, checked_at = self.outcomes.get(c.identity, ('В очереди EXBO',0))
@@ -279,20 +331,37 @@ class TrackerFeed:
                     status = 'Только SZ: лот с модулями/содержимым, проверка не поддерживается'
                 elif self.budget > 0 and c.cost > self.budget:
                     status = 'Выше бюджета — только просмотр SZ'
+                elif c.priority <= 0:
+                    status = 'SZ: нет положительного плюса после комиссии'
                 elif not self.connected:
                     status = 'SZ отключён — дождитесь подключения'
                 elif self.stale:
                     status = 'SZ: источник сообщает об устаревших данных'
                 elif checked_at and now-checked_at > RESULT_TTL:
                     status = 'Проверка EXBO устарела — ожидает обновления'
+                available, availability_at = self.availability.get(c.identity,(None,0))
+                availability = 'Не проверено'
+                if not self.connected or self.stale:
+                    availability = 'Источник SZ недоступен/устарел'
+                elif availability_at and now-availability_at > RESULT_TTL:
+                    availability = 'Проверка наличия устарела'
+                elif available is not None and 0 <= now-availability_at <= RESULT_TTL:
+                    availability = 'EXBO: предложение найдено' if available else 'EXBO: предложение не найдено в выборке'
+                elif availability_at:
+                    availability = 'EXBO: наличие не установлено (неполная выборка)'
                 feed_rows.append({'name':c.name,'slug':c.slug,'amount':c.amount,'cost':c.cost,
                                   'qlt':c.qlt,'ptn':c.ptn,'target_price':c.target_price,
-                                  'received_at':c.received_at,'status':status})
+                                  'received_at':c.received_at,'status':status,'availability':availability,
+                                  'available':False if available is False else available if 0 <= now-availability_at <= RESULT_TTL else None,
+                                  'availability_at':availability_at,'unsupported':c.unsupported,
+                                  'estimated_profit':math.floor(c.target_price*.95)-c.cost,
+                                  'estimate_period':c.estimate_period,'estimate_samples':c.estimate_samples,
+                                  'sales_per_day':c.sales_per_day,'quality_label':c.quality_label})
             state = {'phase': 'Источник сообщает об устаревших данных' if self.stale else self.phase,
                      'connected':self.connected,'stale':self.stale,'received':self.pool.received,
                      'checked':self.checked,'queue':self.pool.queued(),'skipped':self.pool.skipped,
                      'duplicates':self.pool.duplicates,'last_message':self.last_message,'running':True,
-                     'feed_rows':feed_rows}
+                     'feed_rows':feed_rows,'budget':self.budget}
         if not self.stop.is_set():
             self.on_state(state)
 
@@ -373,6 +442,11 @@ class TrackerFeed:
                         with self.lock:
                             for c in batch:
                                 self.outcomes[c.identity] = (self.verifier.outcomes.get(c.identity,'EXBO: проверка завершена'),now)
+                                self.availability[c.identity] = (self.verifier.availability.get(c.identity),now)
+                                if self.verifier.availability.get(c.identity) is False:
+                                    self.pool.unavailable.add(c.identity)
+                                elif self.verifier.availability.get(c.identity) is True:
+                                    self.pool.unavailable.discard(c.identity)
                         self.checked += 1
                         self.last_check[slug] = self.clock()
                         self.results[slug] = rows
@@ -385,6 +459,7 @@ class TrackerFeed:
                         with self.lock:
                             for c in batch:
                                 self.outcomes[c.identity] = (f'EXBO: ошибка {code or type(error).__name__}, повтор позже',self.clock())
+                                self.availability.pop(c.identity,None)
                             if slug in self.pool.active:
                                 self.pool.pending.add(slug)
                     with self.lock:

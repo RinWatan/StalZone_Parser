@@ -26,4 +26,5 @@ map_dir.txt
 pda_root.txt
 price_watch.json
 price_watch.tmp
+tracker_filters.json
 lunar_cache/
