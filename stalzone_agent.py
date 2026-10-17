@@ -2,6 +2,7 @@
 """STALZONE агент. Цены и список предметов только из официальных данных EXBO."""
 import argparse
 import json
+import math
 import statistics
 import sys
 import threading
@@ -1786,6 +1787,154 @@ def drop_market(slug):
         _LIVE.pop(slug, None)
 
 
+TRACKER_MIN = 10_000
+TRACKER_DEPTH = 7
+TRACKER_NEED = 3
+# Как у трекера: 1, 3, 4, 7, 14, 30, 90 дней. Короткое окно, если в нём меньше трёх продаж, само расширяется.
+DEPTHS = (1, 3, 4, 7, 14, 30, 90)
+HORIZONS = (("d1", 1, "1 день"), ("d7", 7, "7 дней"), ("d30", 30, "месяц"))
+
+
+def _pct(ordered, q):
+    if not ordered:
+        return 0.0
+    if len(ordered) == 1:
+        return float(ordered[0])
+    pos = (len(ordered) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(ordered) - 1)
+    frac = pos - lo
+    return ordered[lo] * (1 - frac) + ordered[hi] * frac
+
+
+def _clip_rows(samples):
+    units = sorted(row[0] for row in samples)
+    if not units:
+        return []
+    base = statistics.median(units[: max(1, len(units) // 2)])
+    if base <= 0:
+        return []
+    cap = base * 2.5
+    return [row for row in samples if row[0] <= cap]
+
+
+def _fair_of(samples, method):
+    units = [row[0] for row in samples]
+    if method == "mean":
+        return sum(units) / len(units)
+    if method == "weighted":
+        newest = max(row[1] for row in samples)
+        span = max(newest - min(row[1] for row in samples), 3600)
+        weight = total = 0.0
+        for price, ts in samples:
+            w = 0.5 ** ((newest - ts) / span)
+            weight += w
+            total += price * w
+        return total / weight if weight else 0.0
+    return statistics.median(units)
+
+
+def _in_days(samples, now, days):
+    limit = days * 86400
+    return [row for row in samples if now - row[1] <= limit]
+
+
+def _select_window(samples, now, depth_days, ignore_depth):
+    """7 дней, если продаж хватает. Иначе, как у них при редком предмете, берём более длинное окно от 3 продаж."""
+    chosen = _in_days(samples, now, depth_days)
+    if not ignore_depth or len(chosen) >= TRACKER_NEED:
+        return chosen, depth_days
+    for days in DEPTHS:
+        if days <= depth_days:
+            continue
+        wider = _in_days(samples, now, days)
+        if len(wider) >= TRACKER_NEED:
+            return wider, days
+    if len(samples) >= TRACKER_NEED:
+        return list(samples), None
+    return chosen, depth_days
+
+
+def _gap_stats(samples):
+    times = sorted(row[1] for row in samples)
+    if len(times) < 2:
+        return None
+    gaps = sorted((times[i] - times[i - 1]) / 3600 for i in range(1, len(times)))
+    return _pct(gaps, 0.25), _pct(gaps, 0.75), _pct(gaps, 0.80)
+
+
+def _one_horizon(code, days, title, block, method):
+    if len(block) < TRACKER_NEED:
+        return {"code": code, "title": title, "status": "INSUFFICIENT_EVIDENCE", "ask": 0, "share": False, "n": len(block), "hours": None}
+    kept = _clip_rows(block)
+    if not kept:
+        return {"code": code, "title": title, "status": "INSUFFICIENT_EVIDENCE", "ask": 0, "share": False, "n": 0, "hours": None}
+    gaps = _gap_stats(kept)
+    hours = (gaps[0], gaps[1]) if gaps else None
+    # 8 из 10 уходят в этот срок, если 80-й перцентиль паузы между продажами не длиннее горизонта.
+    share = bool(gaps and gaps[2] <= days * 24)
+    return {
+        "code": code, "title": title, "status": "ok", "ask": _fair_of(kept, method),
+        "share": share, "hours": hours, "n": len(kept),
+    }
+
+
+def _mark_inversion(horizons):
+    """Длинный срок не может просить дешевле короткого: сроки тогда расходятся, цены нет."""
+    last = None
+    for row in horizons:
+        if row["status"] != "ok":
+            continue
+        if last is not None and row["ask"] + 1 < last["ask"] * 0.98:
+            row["status"] = "PRICE_INVERSION"
+            row["share"] = False
+        else:
+            last = row
+
+
+def _net_profit(stack_price, buyout):
+    """На руки после 5%: целые рубли, без копеечной ошибки float."""
+    gross = int(math.floor(float(stack_price) + 1e-6))
+    return gross * 95 // 100 - int(buyout)
+
+
+def tracker_quote(samples, now, ignore_depth=True, method="median", depth_days=TRACKER_DEPTH):
+    """Цена выставления: медиана продаж за глубину (по умолчанию 7 дней). Редкий лот берёт окно длиннее."""
+    window, days = _select_window(samples, now, depth_days, ignore_depth)
+    kept = _clip_rows(window)
+    if len(window) < TRACKER_NEED or not kept:
+        return None
+    ask = _fair_of(kept, method)
+    if ask <= 0:
+        return None
+    span = max(now - min(row[1] for row in kept), 20 * 60)
+    per_h = len(kept) / (span / 3600)
+    horizons = []
+    for code, horizon_days, title in HORIZONS:
+        block = _in_days(samples, now, horizon_days)
+        horizons.append(_one_horizon(code, horizon_days, title, block, method))
+    _mark_inversion(horizons)
+    advisor = next((row for row in horizons if row["status"] == "ok" and row["share"]), None)
+    if advisor is None:
+        advisor = next((row for row in horizons if row["status"] == "ok"), None)
+    return {
+        "ask": ask,
+        "code": f"d{days}" if days else "all",
+        "title": f"{days} дн." if days else "вся история",
+        "depth_days": days,
+        "advisor": advisor["code"] if advisor else None,
+        "advisor_title": advisor["title"] if advisor else None,
+        "share": bool(advisor and advisor["share"]),
+        "hours": advisor["hours"] if advisor else None,
+        "n": len(window),
+        "per_h": per_h,
+        "per_day": per_h * 24,
+        "horizons": horizons,
+        "stale_min": None,
+        "method": method,
+    }
+
+
 def _fair_exit(samples, now, need):
     """Обычная цена без разовых многомиллионных сделок. Продажи идут от новых к старым."""
     recent = [row for row in samples if now - row[1] <= 12 * 3600]
@@ -1828,16 +1977,16 @@ def find_flips(book, slug, name, allow_single=False):
     deals = []
     for (key, amt), rows in offers.items():
         hist = []
-        need = 4 if key is not None else 6
         for row in book["sales"].get(key) or []:
             if row[0] != amt:
                 continue
             ts = row[2] if len(row) > 2 else now
             hist.append((row[1], ts))
-        got = _fair_exit(hist, now, need)
-        if not got or got[1] < 0.5:
+        quote = tracker_quote(hist, now)
+        if not quote:
             continue
-        exit_hist, per_h = got
+        exit_hist = quote["ask"]
+        per_h = quote["per_h"]
         rows.sort()
         # Only clearing the cheapest tier can expose the next asking price.
         unit, buy = rows[0]
@@ -1846,8 +1995,8 @@ def find_flips(book, slug, name, allow_single=False):
             j += 1
         nxt = rows[j][0] if j < len(rows) else None
         sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
-        net_u = sell_at * COMM - unit
-        if net_u <= 0:
+        profit = _net_profit(sell_at * amt, buy)
+        if profit < TRACKER_MIN:
             continue
         copies = j
         if copies > max(1, int(per_h * 1.5)):
@@ -1866,9 +2015,13 @@ def find_flips(book, slug, name, allow_single=False):
             label = name
         deals.append({
             "name": label, "slug": slug, "amount": amt, "buyout": buy,
-            "unit": unit, "med": sell_at, "net_u": net_u, "profit": net_u * amt,
-            "roi": net_u / unit, "count": copies, "required_copies": copies, "per_h": per_h,
+            "unit": unit, "med": sell_at, "net_u": profit / amt, "profit": profit,
+            "roi": profit / buy, "count": copies, "required_copies": copies, "per_h": per_h,
             "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
+            "per_day": quote["per_day"], "hours": quote.get("hours"),
+            "horizon": quote.get("advisor") or quote["code"],
+            "horizon_title": quote.get("advisor_title") or quote["title"],
+            "share": quote["share"], "stale_min": quote.get("stale_min"),
         })
     deals.sort(key=lambda r: (r["profit"] * r["count"], r["profit"] * r["per_h"]), reverse=True)
     return deals[:3]
@@ -2195,10 +2348,24 @@ def _plan(item):
     spent = copies * buy
     roi = gain / spent * 100 if spent else 0
     hour = _hour_gain(item)
+    extra = ""
+    if item.get("horizon"):
+        hours = item.get("hours")
+        if hours and hours[1] < 1:
+            when = f"Обычно уходит за {hours[0] * 60:.0f}–{hours[1] * 60:.0f} мин. "
+        elif hours and hours[0] < 1:
+            when = f"Обычно уходит за {hours[0] * 60:.0f} мин – {hours[1]:.0f} ч. "
+        elif hours:
+            when = f"Обычно уходит за {hours[0]:.0f}–{hours[1]:.0f} ч. "
+        else:
+            when = "Сроки продажи ещё собираются. "
+        share = f"8 из 10 таких лотов продаются за {item.get('horizon_title')}. " if item.get("share") else ""
+        stale = f"Лента молчит {item['stale_min']} мин. " if item.get("stale_min") else ""
+        extra = when + share + f"{float(item.get('per_day') or 0):.1f} продано/день. " + stale
     return (
         f"Купи {copies} по {buy}. Выстави пачку за {ask:.0f}. "
         f"После 5% придёт {hand:.0f}. Плюс {gain:.0f} ({roi:.0f}%). "
-        f"Плюс в час {hour:.0f}."
+        f"Плюс в час {hour:.0f}. " + extra
     )
 
 

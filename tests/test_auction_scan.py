@@ -1,6 +1,7 @@
 import tempfile
 import threading
 import time
+import math
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -36,17 +37,19 @@ class ScanTests(unittest.TestCase):
             self.assertEqual(a._buy_one(self.item),[]); get.assert_not_called()
     def test_profitable_buy_preserves_liquidity_and_commission(self):
         now=time.time()
-        sales=[(10,100,now-i*600) for i in range(8)]
-        lots=[{'amount':10,'buyoutPrice':700,'additional':{}}]*3
-        with patch.object(a,'live_lots',return_value=lots), patch.object(a,'market_book',return_value={'sales':{None:sales},'live':{None:70}}):
+        sales=[(10,5000,now-i*600) for i in range(8)]
+        lots=[{'amount':10,'buyoutPrice':15000,'additional':{}}]*3
+        with patch.object(a,'live_lots',return_value=lots), patch.object(a,'market_book',return_value={'sales':{None:sales},'live':{None:1500}}):
             result=a._buy_one(self.item)
         self.assertEqual(len(result),1)
-        self.assertEqual(result[0]['profit'],(100*a.COMM-70)*10)
+        profit=math.floor(5000*10*a.COMM)-15000
+        self.assertEqual(result[0]['profit'], profit)
+        self.assertGreaterEqual(profit, a.TRACKER_MIN)
         self.assertEqual(result[0]['count'],3)
         buys=a._as_buys(result)
-        self.assertEqual(buys[0]['gain'], (100*a.COMM-70)*10*3)
-        self.assertEqual(a.fit_budget(buys,1400),[])
-        self.assertEqual(a.fit_budget(buys,2100)[0]['copies'],3)
+        self.assertEqual(buys[0]['gain'], profit*3)
+        self.assertEqual(a.fit_budget(buys,30000),[])
+        self.assertEqual(a.fit_budget(buys,45000)[0]['copies'],3)
     def test_stop_cancels_queued_items(self):
         seen=[]; lock=threading.Lock()
         def process(item):
@@ -75,11 +78,11 @@ class ScanTests(unittest.TestCase):
 
     def test_recommends_only_cheapest_profitable_tier(self):
         now=time.time()
-        a._LIVE['abc']=[{'amount':10,'buyoutPrice':p,'additional':{}} for p in [500,800,1000]]
-        sales=[(10,150,now-i*600) for i in range(8)]
+        a._LIVE['abc']=[{'amount':10,'buyoutPrice':p,'additional':{}} for p in [500,12000]]
+        sales=[(10,5000,now-i*600) for i in range(8)]
         result=a.find_flips({'sales':{None:sales}},'abc','Test')
         self.assertEqual([r['buyout'] for r in result],[500])
-        self.assertEqual(result[0]['med'],80)
+        self.assertEqual(result[0]['med'],1200)
 
     def test_budget_must_cover_all_lots_required_to_clear_price(self):
         row={'buyout':700,'copies':3,'required_copies':3,'profit':250,'gain':750,'per_h':1,'med':200,'amount':10}
@@ -112,11 +115,18 @@ class ScanTests(unittest.TestCase):
 
     def test_lot_a_bit_under_the_sale_is_a_buy(self):
         now=time.time()
-        a._LIVE['abc']=[{'amount':1,'buyoutPrice':92000,'additional':{}}]
+        a._LIVE['abc']=[{'amount':1,'buyoutPrice':80000,'additional':{}}]
         sales=[(1,100000,now-i*600) for i in range(8)]
         result=a.find_flips({'sales':{None:sales}},'abc','Test',True)
         self.assertEqual(len(result),1)
-        self.assertEqual(result[0]['profit'],100000*a.COMM-92000)
+        self.assertEqual(result[0]['profit'],100000*a.COMM-80000)
+        self.assertGreaterEqual(result[0]['profit'], a.TRACKER_MIN)
+
+    def test_three_thousand_does_not_clear_the_tracker_floor(self):
+        now=time.time()
+        a._LIVE['abc']=[{'amount':1,'buyoutPrice':92000,'additional':{}}]
+        sales=[(1,100000,now-i*600) for i in range(8)]
+        self.assertEqual(a.find_flips({'sales':{None:sales}},'abc','Test',True),[])
 
     def test_spike_sales_do_not_raise_the_buy_count(self):
         now=time.time()
@@ -139,7 +149,7 @@ class ScanTests(unittest.TestCase):
     def test_old_sales_listed_first_still_count_the_newest(self):
         now=time.time()
         a._LIVE['abc']=[{'amount':10,'buyoutPrice':500,'additional':{}}]
-        sales=[(10,150,now-3600*(8-i)) for i in range(8)]
+        sales=[(10,2000,now-3600*(8-i)) for i in range(8)]
         result=a.find_flips({'sales':{None:sales}},'abc','Test')
         self.assertEqual(len(result),1)
 
