@@ -27,7 +27,7 @@ if errorlevel 1 (
 
 echo.
 echo --- Оверлей ---
-python -m PyInstaller --noconfirm --onefile --windowed --name STALZONE --hidden-import stalzone_agent --hidden-import stalzone_overlay --hidden-import stalzone_game_search --hidden-import stalzone_pda --hidden-import stalzone_lunar --hidden-import stalzone_tracker --hidden-import websocket --hidden-import game_window --hidden-import httpx --hidden-import httpcore --collect-all webview --collect-all lz4 --collect-all wasmtime --distpath dist --workpath build stalzone_gui.py
+python -m PyInstaller --noconfirm --onefile --windowed --name STALZONE --hidden-import stalzone_agent --hidden-import stalzone_overlay --hidden-import stalzone_game_search --hidden-import stalzone_pda --hidden-import stalzone_lunar --hidden-import stalzone_tracker --hidden-import stalzone_resale --hidden-import websocket --hidden-import game_window --hidden-import httpx --hidden-import httpcore --collect-all webview --collect-all lz4 --collect-all wasmtime --distpath dist --workpath build stalzone_gui.py
 if errorlevel 1 (
   echo Сборка окна сломалась
   pause

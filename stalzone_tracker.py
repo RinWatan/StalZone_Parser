@@ -5,7 +5,8 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import stalzone_resale as resale
 
 FEED_URL = 'wss://sztracker.ru/ws/lots?lang=ru&region=RU'
 CANDIDATE_TTL = 12*3600
@@ -58,6 +59,7 @@ class Candidate:
     estimate_samples: int = 0
     sales_per_day: float | None = None
     quality_label: str = ''
+    metadata: dict = field(default_factory=dict)
 
     @property
     def variant(self):
@@ -103,7 +105,7 @@ def candidate(row, budget, now, display_only=False):
         label = str(info.get('labelPercentQlt') or '')[:80] if isinstance(info,dict) else ''
         return Candidate(slug, name, amount, int(price), quality, point,
                          str(row['uniqueId']), now, expected, target, unsupported,
-                         period, samples, sales_per_day, label)
+                         period, samples, sales_per_day, label, resale.metadata(row,period))
     except (ValueError, TypeError, OverflowError):
         return None
 
@@ -189,11 +191,22 @@ class Verifier:
         self.history = OrderedDict()
         self.outcomes = {}
         self.availability = {}
+        self.contexts = {}
+
+    def _contexts(self, candidates, lots):
+        out = {}
+        for c in candidates:
+            units=[int(lot['buyoutPrice'])/int(lot['amount']) for lot in lots
+                   if self.api.side_key(lot.get('additional'))==c.variant]
+            out[c.identity]={'cheapest_unit':min(units) if units else None,
+                             'variant_lots':len(units),'cheaper_lots':sum(u<c.cost/c.amount for u in units)}
+        return out
 
     def check(self, candidates):
         api = self.api
         self.outcomes = {c.identity:'Проверка EXBO прервана' for c in candidates}
         self.availability = {c.identity:None for c in candidates}
+        self.contexts = {}
         if not candidates or api.HALT.is_set():
             return []
         slug, name = candidates[0].slug, candidates[0].name
@@ -220,6 +233,8 @@ class Verifier:
                 continue
         self.availability = {c.identity:(True if (c.variant,c.amount,c.cost) in matched
                                         else None if len(fetched)>=800 else False) for c in candidates}
+        self.contexts = self._contexts(candidates,lots)
+        for context in self.contexts.values():context['limited']=len(fetched)>=800
         if not matched:
             self.outcomes = {c.identity:'EXBO: лот не найден среди первых 800 предложений'
                              for c in candidates}
@@ -259,6 +274,8 @@ class Verifier:
                    for lot in lots} & wanted
         self.availability = {c.identity:(True if (c.variant,c.amount,c.cost) in matched
                                         else None if len(fetched)>=800 else False) for c in candidates}
+        self.contexts = self._contexts(candidates,lots)
+        for context in self.contexts.values():context['limited']=len(fetched)>=800
         for c in candidates:
             if (c.variant,c.amount,c.cost) not in matched:
                 self.outcomes[c.identity] = 'EXBO: лот не найден или истёк'
@@ -300,6 +317,7 @@ class TrackerFeed:
         self.cooldowns, self.last_check, self.results = {}, {}, {}
         self.outcomes = {}
         self.availability = {}
+        self.contexts = {}
 
     @staticmethod
     def _connect():
@@ -324,6 +342,7 @@ class TrackerFeed:
             identities = {c.identity for c in active}
             self.outcomes = {k:v for k,v in self.outcomes.items() if k in identities}
             self.availability = {k:v for k,v in self.availability.items() if k in identities}
+            self.contexts = {k:v for k,v in self.contexts.items() if k in identities}
             feed_rows = []
             for c in sorted(active, key=lambda c:c.received_at, reverse=True):
                 status, checked_at = self.outcomes.get(c.identity, ('В очереди EXBO',0))
@@ -349,14 +368,15 @@ class TrackerFeed:
                     availability = 'EXBO: предложение найдено' if available else 'EXBO: предложение не найдено в выборке'
                 elif availability_at:
                     availability = 'EXBO: наличие не установлено (неполная выборка)'
-                feed_rows.append({'name':c.name,'slug':c.slug,'amount':c.amount,'cost':c.cost,
+                feed_rows.append({**c.metadata,'name':c.name,'slug':c.slug,'source_id':c.source_id,'amount':c.amount,'cost':c.cost,
                                   'qlt':c.qlt,'ptn':c.ptn,'target_price':c.target_price,
                                   'received_at':c.received_at,'status':status,'availability':availability,
                                   'available':False if available is False else available if 0 <= now-availability_at <= RESULT_TTL else None,
                                   'availability_at':availability_at,'unsupported':c.unsupported,
                                   'estimated_profit':math.floor(c.target_price*.95)-c.cost,
                                   'estimate_period':c.estimate_period,'estimate_samples':c.estimate_samples,
-                                  'sales_per_day':c.sales_per_day,'quality_label':c.quality_label})
+                                  'sales_per_day':c.sales_per_day,'quality_label':c.quality_label,
+                                  'exbo_context':self.contexts.get(c.identity,{})})
             state = {'phase': 'Источник сообщает об устаревших данных' if self.stale else self.phase,
                      'connected':self.connected,'stale':self.stale,'received':self.pool.received,
                      'checked':self.checked,'queue':self.pool.queued(),'skipped':self.pool.skipped,
@@ -443,6 +463,8 @@ class TrackerFeed:
                             for c in batch:
                                 self.outcomes[c.identity] = (self.verifier.outcomes.get(c.identity,'EXBO: проверка завершена'),now)
                                 self.availability[c.identity] = (self.verifier.availability.get(c.identity),now)
+                                context=self.verifier.contexts.get(c.identity)
+                                if context:self.contexts[c.identity]=dict(context,checked_at=now)
                                 if self.verifier.availability.get(c.identity) is False:
                                     self.pool.unavailable.add(c.identity)
                                 elif self.verifier.availability.get(c.identity) is True:
@@ -460,6 +482,7 @@ class TrackerFeed:
                             for c in batch:
                                 self.outcomes[c.identity] = (f'EXBO: ошибка {code or type(error).__name__}, повтор позже',self.clock())
                                 self.availability.pop(c.identity,None)
+                                self.contexts.pop(c.identity,None)
                             if slug in self.pool.active:
                                 self.pool.pending.add(slug)
                     with self.lock:
