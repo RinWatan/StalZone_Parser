@@ -553,13 +553,13 @@ _SELL_LOCK = threading.Lock()
 SELL_FOR = 20 * 60
 
 
-def auction_listing(force=False):
+def auction_listing(force=False, status=None):
     """Каталог из официальной базы предметов EXBO. Сайт не вызывается."""
     global _LISTING
     with _LISTING_LOCK:
         if _LISTING is not None and not force:
             return _LISTING
-    items = _load_catalog(force)
+    items = _load_catalog(force, status)
     off = _off_auction()
     items = [item for item in items if item["id"] not in off]
     with _LISTING_LOCK:
@@ -567,16 +567,22 @@ def auction_listing(force=False):
     return items
 
 
-def _load_catalog(force=False):
+def _tell(status, msg):
+    log(msg)
+    if status:
+        status(msg)
+
+
+def _load_catalog(force=False, status=None):
     path = DIR / "catalog.json"
     fresh = path.exists() and time.time() - path.stat().st_mtime < 3 * 86400
     if fresh and not force:
         return json.loads(path.read_text(encoding="utf-8"))
     try:
-        items = _catalog_from_exbo()
+        items = _catalog_from_exbo(status)
     except Exception:
         if path.exists():
-            log("База EXBO не скачалась, беру прошлый каталог")
+            _tell(status, "База EXBO не скачалась, беру прошлый каталог")
             return json.loads(path.read_text(encoding="utf-8"))
         raise
     if not items:
@@ -588,34 +594,34 @@ def _load_catalog(force=False):
     return items
 
 
-def _catalog_from_exbo():
+def _catalog_from_exbo(status=None):
     """Список предметов из ru/listing.json. Полный архив только если список не открылся."""
-    log("Качаю список предметов EXBO")
+    _tell(status, "Качаю список предметов EXBO")
     try:
-        items = _catalog_from_listing()
+        items = _catalog_from_listing(status)
     except Exception as exc:
-        log(f"Список предметов не открылся ({exc}). Качаю архив базы")
-        return _catalog_from_zip()
+        _tell(status, f"Список предметов не открылся ({exc}). Качаю архив базы")
+        return _catalog_from_zip(status)
     if items is None:
         return None
     if items:
         return items
-    log("Список предметов пустой, качаю архив базы")
-    return _catalog_from_zip()
+    _tell(status, "Список предметов пустой, качаю архив базы")
+    return _catalog_from_zip(status)
 
 
-def _catalog_from_listing():
+def _catalog_from_listing(status=None):
     errors = []
     for url in DB_LISTINGS:
         try:
-            return _listing_from(url)
+            return _listing_from(url, status)
         except Exception as exc:
             errors.append(str(exc))
             log(f"Список не открылся ({url}): {exc}")
     raise RuntimeError(errors[-1] if errors else "список предметов пуст")
 
 
-def _listing_from(url):
+def _listing_from(url, status=None):
     path = DIR / "catalog.json"
     stamp = DIR / "catalog.etag"
     headers = {"User-Agent": UA, "Accept": "application/json"}
@@ -624,13 +630,26 @@ def _listing_from(url):
         headers["If-None-Match"] = saved[1].strip()
     timeout = httpx.Timeout(20.0, connect=8.0)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        res = client.get(url, headers=headers)
-    if res.status_code == 304:
-        log("База предметов не менялась, архив заново не качаю")
-        return None
-    res.raise_for_status()
-    items = _items_in_listing(res.json())
-    etag = (res.headers.get("etag") or "").strip()
+        with client.stream("GET", url, headers=headers) as res:
+            if res.status_code == 304:
+                _tell(status, "База предметов не менялась, архив заново не качаю")
+                return None
+            res.raise_for_status()
+            total = int(res.headers.get("content-length") or 0)
+            etag = (res.headers.get("etag") or "").strip()
+            chunks = []
+            got = 0
+            mark = 0
+            for chunk in res.iter_bytes(64 * 1024):
+                chunks.append(chunk)
+                got += len(chunk)
+                if status and got - mark >= 256 * 1024:
+                    mark = got
+                    if total:
+                        status(f"Список предметов {got // 1024} из {max(total, got) // 1024} КБ")
+                    else:
+                        status(f"Список предметов {got // 1024} КБ")
+    items = _items_in_listing(json.loads(b"".join(chunks)))
     if etag and items:
         stamp.write_text(url + "\n" + etag + "\n", encoding="utf-8")
     return items
@@ -652,17 +671,24 @@ def _items_in_listing(rows):
     return _sorted_items(found)
 
 
-def _catalog_from_zip():
+def _catalog_from_zip(status=None):
     """Запасной путь: весь архив базы, если короткий список недоступен."""
-    log("Качаю архив базы EXBO, около 190 МБ")
+    _tell(status, "Качаю архив базы EXBO, около 190 МБ")
     tmp = DIR / "stalzone-database.zip"
     try:
         with httpx.Client(timeout=180, follow_redirects=True) as client:
             with client.stream("GET", DB_ZIP, headers={"User-Agent": UA}) as src:
                 src.raise_for_status()
+                total = int(src.headers.get("content-length") or 0)
+                got = 0
                 with tmp.open("wb") as dst:
                     for chunk in src.iter_bytes(1024 * 1024):
                         dst.write(chunk)
+                        got += len(chunk)
+                        if total:
+                            _tell(status, f"Архив базы {got // 1048576} из {max(total, got) // 1048576} МБ")
+                        else:
+                            _tell(status, f"Архив базы {got // 1048576} МБ")
         return _items_in_zip(tmp)
     finally:
         tmp.unlink(missing_ok=True)

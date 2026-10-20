@@ -162,6 +162,8 @@ class Bridge:
         self._compact = []
         self._launch_lock = threading.Lock()
         self._search_lock = threading.Lock()
+        self._catalog_busy = False
+        self._catalog_payload = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -401,7 +403,7 @@ class Bridge:
         with self.lock:
             self.logs.append(line)
             self.logs = self.logs[-80:]
-            self.status = str(msg)[:80]
+            self.status = str(msg)[:240]
 
     def _show(self, data):
         if "buys" in data:
@@ -446,6 +448,8 @@ class Bridge:
 
     def poll(self):
         with self.lock:
+            catalog = self._catalog_payload
+            self._catalog_payload = None
             return {
                 "status": self.status,
                 "busy": self.busy,
@@ -453,6 +457,7 @@ class Bridge:
                 "tables": self.tables,
                 "rev": self.rev,
                 "compact": list(self._compact),
+                "catalog": catalog,
                 "hud": self._hud.snapshot() if self._hud else {},
             }
 
@@ -625,27 +630,41 @@ class Bridge:
         return agent.fit_budget(deals, budget)
 
     def load_catalog(self):
+        with self.lock:
+            if self._catalog_busy:
+                return {"ok": True, "pending": True, "items": []}
+            self._catalog_busy = True
+        self.note("Открываю каталог")
+        threading.Thread(target=self._catalog_job, daemon=True).start()
+        return {"ok": True, "pending": True, "items": []}
+
+    def _catalog_job(self):
         try:
-            items = agent.auction_listing()
+            items = agent.auction_listing(status=self.note)
+            self.auction = items
+            payload = {
+                "ok": True,
+                "items": [
+                    {
+                        "id": i["id"],
+                        "name": i["name"],
+                        "cat": i["cat"],
+                        "color": i.get("color") or "DEFAULT",
+                        "rank": agent.RANK_NAME.get(i.get("color"), i.get("color") or ""),
+                        "order": agent.RANK_ORDER.get(i.get("color"), 9),
+                    }
+                    for i in items
+                ],
+                "favs": sorted(self.fav),
+                "recent": list(self.recent),
+            }
+            self.note(f"Каталог: {len(items)} предметов")
         except Exception as e:
+            payload = {"ok": False, "error": str(e), "items": []}
             self.note(f"Каталог не загрузился: {e}")
-            return {"ok": False, "error": str(e), "items": []}
-        self.auction = items
-        self.note(f"Каталог: {len(items)} предметов")
-        return {
-            "ok": True,
-            "items": [
-                {
-                    "id": i["id"],
-                    "name": i["name"],
-                    "cat": i["cat"],
-                    "color": i.get("color") or "DEFAULT",
-                    "rank": agent.RANK_NAME.get(i.get("color"), i.get("color") or ""),
-                    "order": agent.RANK_ORDER.get(i.get("color"), 9),
-                }
-                for i in items
-            ],
-        }
+        with self.lock:
+            self._catalog_payload = payload
+            self._catalog_busy = False
 
     def toggle_fav(self, slug):
         if not slug:
@@ -766,7 +785,7 @@ PAGE = r"""<!DOCTYPE html>
   header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--side); }
   header h1, .brand b { margin: 0; font-size: 15px; letter-spacing: 0.08em; color: var(--green); }
   header button { padding: 5px 9px; }
-  #status { margin-left: auto; color: var(--dim); font-size: 12px; }
+  #status { margin-left: auto; color: var(--dim); font-size: 12px; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #full { display: none; flex: 1; min-height: 0; }
   body.full #full { display: flex; }
   body.full #compact, body.full .compact-brand { display: none; }
@@ -821,6 +840,7 @@ PAGE = r"""<!DOCTYPE html>
   .balance { margin-top: auto; margin: auto 12px 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: #0e1512; }
   .balance span, .balance small { display: block; color: var(--dim); font-size: 12px; }
   .balance b { display: block; margin: 4px 0; color: var(--green); font-size: 20px; }
+  .balance small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
   .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
   .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
@@ -831,13 +851,16 @@ PAGE = r"""<!DOCTYPE html>
   .range input { width: 100%; }
   .results { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; gap: 8px; }
   .result-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
-  .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; }
+  .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; cursor: pointer; }
   .pick.on { border-color: var(--green); background: #14211b; }
   .pick .avatar { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #101614; color: var(--green); font-weight: 700; flex-shrink: 0; }
   .pick .who { display: flex; flex-direction: column; min-width: 0; }
   .pick .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pick .who small, .found { color: var(--dim); }
-  .pick .watch { margin-left: auto; color: var(--orange); }
+  .pick .watch { margin-left: auto; color: var(--dim); background: transparent; border: 0; font-size: 18px; padding: 4px 8px; }
+  .pick .watch.on { color: var(--orange); }
+  tr.more td { white-space: normal; color: var(--dim); background: #121816; }
+  tr.face { cursor: pointer; }
   #lotinfo { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
   .sub { display: flex; gap: 6px; }
   .sub button.on { color: #06210f; background: var(--green); }
@@ -884,10 +907,9 @@ PAGE = r"""<!DOCTYPE html>
       <input id="mins" value="30"/>
       <span>мин</span>
       <span>бюджет</span>
-      <input id="budget" value="5000000"/>
+      <input id="budget" value="5кк" placeholder="5кк" title="Можно писать 5кк, 500к или 5000000"/>
       <button id="orderswitch2" data-order type="button">По часу</button>
       <button class="stop" id="stop" disabled>Стоп</button>
-      <select id="section"></select>
     </div>
     <div id="stats">
       <div class="stat"><span>Лотов в бюджете</span><b id="stat-count">0</b></div>
@@ -913,8 +935,26 @@ const TAB_BLURB = {
   protos: "Протоартефакты, если после комиссии есть запас."
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain"};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:""};
 const $ = (id) => document.getElementById(id);
+
+function prettyMoney(raw) {
+  const text = String(raw ?? "").trim().toLowerCase().replace(/\s/g, "").replace(",", ".");
+  let mult = 1;
+  let body = text;
+  if (body.endsWith("кк")) { mult = 1000000; body = body.slice(0, -2); }
+  else if (body.endsWith("м")) { mult = 1000000; body = body.slice(0, -1); }
+  else if (body.endsWith("к")) { mult = 1000; body = body.slice(0, -1); }
+  const n = Number(body) * mult;
+  if (!n || Number.isNaN(n)) return String(raw || "");
+  if (n % 1000000 === 0) return String(n / 1000000) + "кк";
+  if (n % 1000 === 0) return String(n / 1000) + "к";
+  return String(Math.round(n));
+}
+
+function scanSection() {
+  return TAB_NAME[document.body.dataset.screen || "buys"] || "Общий";
+}
 
 function rubShort(n) {
   n = Number(n) || 0;
@@ -964,6 +1004,10 @@ function paint(key) {
       return rule.desc ? -c : c;
     });
   }
+  if (key === "buys") {
+    paintBuys(box, rows, rule);
+    return;
+  }
   const head = cols.map((c, i) => `<th data-i="${i}">${c}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
   const body = rows.map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
   box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
@@ -974,6 +1018,37 @@ function paint(key) {
     paint(key);
   });
   box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => pywebview.api.game_search(tr.cells[0].textContent));
+}
+
+function paintBuys(box, rows, rule) {
+  const face = [[0, "Предмет"], [4, "Купить"], [7, "Плюс"], [10, "В час"]];
+  const head = face.map(([i, name]) => `<th data-i="${i}">${name}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
+  const body = rows.map(r => {
+    const id = `${r.cells[0]}|${r.cells[4]}`;
+    const open = state.openBuy === id;
+    const cells = face.map(([i]) => `<td>${esc(r.cells[i])}</td>`).join("");
+    const bits = [[1, "Редкость"], [2, "Точка"], [3, "Лоты"], [5, "Пачка"], [6, "После 5%"], [8, "Рентабельность"], [9, "Продаж в час"], [11, "План"]]
+      .filter(([i]) => r.cells[i] && r.cells[i] !== "—")
+      .map(([i, name]) => `<div><b>${name}.</b> ${esc(r.cells[i])}</div>`).join("");
+    const more = open ? `<tr class="more"><td colspan="4">${bits}<button type="button" class="ingame">Найти в аукционе</button></td></tr>` : "";
+    return `<tr class="face ${r.tag || ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${cells}</tr>${more}`;
+  }).join("");
+  box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="4">Прогон найдёт подходящие лоты</td></tr>'}</tbody></table>`;
+  box.querySelectorAll("th").forEach(th => th.onclick = () => {
+    const i = Number(th.dataset.i);
+    const prev = state.sort.buys;
+    state.sort.buys = {i, desc: prev && prev.i === i ? !prev.desc : true};
+    paint("buys");
+  });
+  box.querySelectorAll("tr.face").forEach(tr => tr.onclick = () => {
+    state.openBuy = state.openBuy === tr.dataset.id ? "" : tr.dataset.id;
+    paint("buys");
+  });
+  box.querySelectorAll("button.ingame").forEach(btn => btn.onclick = (event) => {
+    event.stopPropagation();
+    const row = btn.closest("tr").previousElementSibling;
+    pywebview.api.game_search(row ? row.dataset.name : "");
+  });
 }
 
 function build() {
@@ -1013,8 +1088,6 @@ function build() {
         <select id="lq"></select>
         <label>Заточка</label>
         <div class="range"><input id="lo" value="0"/><input id="hi" value="15"/></div>
-        <button id="fav">В избранное</button>
-        <button class="gold" id="open">Открыть лот</button>
       </aside>
       <section class="results">
         <div class="page-head"><h2>Аукцион</h2><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
@@ -1022,7 +1095,7 @@ function build() {
       </section>
       <aside class="detail">
         <h2 id="detail-name">Лот</h2>
-        <div id="lotinfo">Выбери предмет слева и открой лот. Здесь будет цена, медиана и почему его брать или нет.</div>
+        <div id="lotinfo">Кликни предмет слева. Здесь будет цена, медиана и почему его брать или нет.</div>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
         <div class="sheet" id="lotbox"></div>
       </aside>
@@ -1566,28 +1639,43 @@ function renderItems() {
   $("found").textContent = `Найдено ${items.length}. Показано ${shown.length}.`;
   $("items").innerHTML = shown.map(i => {
     const on = selected === i.id ? " on" : "";
-    const star = state.fav.has(i.id) ? "★" : "";
+    const star = state.fav.has(i.id) ? "on" : "";
+    const mark = state.fav.has(i.id) ? "★" : "☆";
     const letter = (i.name || "?").slice(0, 1);
-    return `<button type="button" class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}"><span class="avatar">${esc(letter)}</span><span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><span class="watch">${star}</span></button>`;
+    return `<div class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}"><span class="avatar">${esc(letter)}</span><span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><button type="button" class="watch ${star}" title="Избранное">${mark}</button></div>`;
   }).join("");
   $("items").querySelectorAll(".pick").forEach(tr => {
     tr.onclick = () => {
       selected = tr.dataset.id;
       $("items").querySelectorAll(".pick").forEach(row => row.classList.toggle("on", row.dataset.id === selected));
-      const row = state.catalog.find(i => i.id === selected);
-      if (row && $("detail-name")) $("detail-name").textContent = row.name;
+      openItem();
     };
-    tr.ondblclick = () => { selected = tr.dataset.id; openItem(); };
+    const star = tr.querySelector(".watch");
+    star.onclick = async (event) => {
+      event.stopPropagation();
+      selected = tr.dataset.id;
+      const r = await pywebview.api.toggle_fav(selected);
+      state.fav = new Set(r.ids || []);
+      renderItems();
+    };
   });
 }
 
 async function loadCatalog() {
   $("found").textContent = "Читаю каталог EXBO…";
   const data = await pywebview.api.load_catalog();
+  if (data && data.items && data.items.length) applyCatalog(data);
+}
+
+function applyCatalog(data) {
+  if (!data || data.pending) return;
   state.catalog = data.items || [];
-  const fav = await pywebview.api.favs();
-  state.fav = new Set(fav.ids || []);
-  state.recent = fav.recent || [];
+  if (data.favs) state.fav = new Set(data.favs);
+  if (data.recent) state.recent = data.recent;
+  if (!data.ok) {
+    $("found").textContent = data.error || "Каталог не загрузился";
+    return;
+  }
   renderItems();
 }
 
@@ -1615,20 +1703,14 @@ function showLots() {
 }
 
 function wire() {
-  $("run").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, $("section").value);
-  $("auto").onclick = () => pywebview.api.start_run(true, $("mins").value, $("budget").value, $("section").value);
+  $("run").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, scanSection());
+  $("auto").onclick = () => pywebview.api.start_run(true, $("mins").value, $("budget").value, scanSection());
   $("live").onclick = () => pywebview.api.start_live($("budget").value);
   $("stop").onclick = () => pywebview.api.stop_run();
   $("q").oninput = renderItems;
   $("cat").onchange = renderItems;
   $("asort").onchange = renderItems;
-  $("fav").onclick = async () => {
-    if (!selected) return;
-    const r = await pywebview.api.toggle_fav(selected);
-    state.fav = new Set(r.ids || []);
-    renderItems();
-  };
-  $("open").onclick = openItem;
+  $("budget").addEventListener("change", () => { $("budget").value = prettyMoney($("budget").value); });
   $("lq").onchange = $("lo").onchange = $("hi").onchange = async () => {
     const data = await pywebview.api.filter_open($("lq").value, $("lo").value, $("hi").value);
     if (!data.ok) return;
@@ -1643,19 +1725,22 @@ function wire() {
 async function tick() {
   const data = await pywebview.api.poll();
   $("status").textContent = data.status || "";
+  $("status").title = data.status || "";
   if ($("side-status")) $("side-status").textContent = data.status || "";
-  if ($("side-budget")) $("side-budget").textContent = $("budget").value || "";
+  const budgetText = prettyMoney($("budget").value || "");
+  if ($("side-budget")) $("side-budget").textContent = budgetText;
   if ($("stat-count")) {
     const rows = data.compact || [];
     const gain = rows.reduce((sum, row) => sum + (Number(row.gain_n) || 0), 0);
     $("stat-count").textContent = String(rows.length);
     $("stat-gain").textContent = rubShort(gain);
-    $("stat-budget").textContent = $("budget").value || "";
+    $("stat-budget").textContent = budgetText;
     $("stat-live").textContent = data.busy ? "скан" : "ждёт";
   }
+  if (data.catalog) applyCatalog(data.catalog);
   $("log").textContent = (data.logs || []).join("\n");
   $("log").scrollTop = $("log").scrollHeight;
-  ["run","auto","live","mins","budget","section"].forEach(id => $(id).disabled = !!data.busy);
+  ["run","auto","live","mins","budget"].forEach(id => $(id).disabled = !!data.busy);
   $("stop").disabled = !data.busy;
   $("quickrun").disabled = !!data.busy;
   $("quickstop").disabled = !data.busy;
@@ -1683,8 +1768,7 @@ async function tick() {
 window.addEventListener("pywebviewready", async () => {
   const boot = await pywebview.api.boot();
   state.columns = boot.columns;
-  $("section").innerHTML = boot.sections.map(s => `<option>${esc(s)}</option>`).join("");
-  $("budget").value = boot.budget;
+  $("budget").value = prettyMoney(boot.budget);
   build();
   $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");
   $("lq").innerHTML = boot.qlt.map(s => `<option>${esc(s)}</option>`).join("");
