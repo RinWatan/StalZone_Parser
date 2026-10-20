@@ -737,88 +737,129 @@ PAGE = r"""<!DOCTYPE html>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
-    --bg: #12100e;
-    --panel: #1b1814;
-    --line: #3a3126;
-    --gold: #e0b15a;
-    --ink: #efeae2;
-    --dim: #9c9486;
-    --buy: #9dccff;
-    --sell: #9ddeaf;
-    --hold: #e0b15a;
-    --skip: #8d877c;
+    --bg: #0c0f0e;
+    --side: #101413;
+    --card: #161b19;
+    --card-2: #1c2220;
+    --line: #2a312e;
+    --green: #3ddc84;
+    --green-dim: #173226;
+    --orange: #f0a035;
+    --ink: #f3f6f4;
+    --dim: #8d9893;
+    --buy: #3ddc84;
+    --sell: #8fd0a4;
+    --hold: #f0a035;
+    --skip: #8d9893;
+    --gold: #3ddc84;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.35 "Segoe UI", sans-serif; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 "Segoe UI", sans-serif; }
   button, select, input { font: inherit; color: inherit; }
-  button { cursor: pointer; border: 0; border-radius: 8px; padding: 8px 14px; background: #2a251c; color: var(--gold); }
-  button:hover { background: #3a3122; }
+  button { cursor: pointer; border: 1px solid transparent; border-radius: 10px; padding: 8px 12px; background: var(--card-2); color: var(--ink); }
+  button:hover { background: #24302b; }
   button:disabled { opacity: 0.45; cursor: default; }
-  button.gold { background: var(--gold); color: #1a140c; font-weight: 700; }
-  button.gold:hover { background: #f0d7a2; }
-  button.stop { background: #6b3030; color: #f6d0c8; }
-  body { display: flex; flex-direction: column; border: 1px solid #82704e; }
-  header { display: flex; gap: 8px; align-items: center; padding: 9px 12px; flex-shrink: 0; border-bottom: 1px solid var(--line); }
-  header h1 { flex: 1; cursor: move; user-select: none; }
+  button.gold { background: var(--green); color: #06210f; font-weight: 700; border: 0; }
+  button.gold:hover { background: #6aeea6; }
+  button.stop { background: #3a2222; color: #f0c2b8; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--side); }
+  header h1, .brand b { margin: 0; font-size: 15px; letter-spacing: 0.08em; color: var(--green); }
   header button { padding: 5px 9px; }
-  #status { padding: 8px 12px; font-size: 12px; flex-shrink: 0; }
-  #full { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  #status { margin-left: auto; color: var(--dim); font-size: 12px; }
+  #full { display: none; flex: 1; min-height: 0; }
   body.full #full { display: flex; }
-  body.full #compact { display: none; }
+  body.full #compact, body.full .compact-brand { display: none; }
   #compact { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0 12px 10px; gap: 8px; }
-  #compact .sheet { flex: 1; min-height: 0; border: 1px solid var(--line); }
+  #compact .sheet { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
   #compact th, #compact td { padding: 8px; font-size: 12px; }
   #compact td:first-child { white-space: normal; }
-  #compact td:last-child { color: var(--buy); }
+  #compact td:nth-child(3), #compact td:nth-child(4) { color: var(--green); font-weight: 700; }
   .compact-actions { display: flex; gap: 6px; }
+  .compact-brand { display: flex; align-items: center; gap: 8px; }
+  .logo {
+    width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--green); color: #06210f; font-weight: 800;
+  }
   #hudhint { font-size: 11px; color: var(--dim); flex-shrink: 0; padding: 6px 12px; border-top: 1px solid var(--line); }
-  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-  h1 { margin: 0; font-size: 20px; color: var(--gold); letter-spacing: 0.04em; }
-  #status { color: var(--dim); }
-  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 16px 10px; }
-  input, select { background: #100e0c; border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .sidenav { width: 228px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .brand { display: flex; gap: 10px; align-items: center; padding: 16px 14px 8px; }
+  .brand small { display: block; color: var(--dim); letter-spacing: 0; font-size: 11px; }
+  .workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 18px; }
+  .bar span { color: var(--dim); font-size: 12px; }
+  input, select { background: #0e1211; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
   input { width: 88px; text-align: center; }
-  #q { width: 220px; text-align: left; }
-  .tabs { display: flex; gap: 6px; padding: 0 16px; overflow-x: auto; }
-  .tabs button { background: transparent; color: var(--dim); border-radius: 8px 8px 0 0; }
-  .tabs button.on { background: var(--panel); color: var(--gold); }
-  main { flex: 1; min-height: 0; margin: 0 16px; background: var(--panel); border-radius: 0 10px 10px 10px; overflow: hidden; }
-  .view { display: none; height: 100%; }
-  .view.on { display: block; }
-  .sheet { height: 100%; overflow: auto; }
+  #q { width: 100%; text-align: left; }
+  .tabs { display: flex; flex-direction: column; gap: 2px; padding: 8px; overflow: auto; }
+  .tabs button { background: transparent; color: var(--dim); text-align: left; border-radius: 10px; }
+  .tabs button.on { background: var(--green-dim); color: var(--green); }
+  #stats { display: none; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0 18px 12px; }
+  body[data-screen="buys"] #stats { display: grid; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+  .stat span { display: block; color: var(--dim); font-size: 12px; margin-bottom: 6px; }
+  .stat b { font-size: 22px; font-weight: 700; }
+  .stat b.green { color: var(--green); }
+  main { flex: 1; min-height: 0; overflow: hidden; }
+  .view { display: none; height: 100%; min-height: 0; }
+  .view.on { display: flex; flex-direction: column; }
+  .page { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 4px 18px 12px; gap: 10px; }
+  .page-head h2 { margin: 0; font-size: 26px; font-weight: 700; }
+  .page-head p, .found { margin: 4px 0 0; color: var(--dim); }
+  .sheet { flex: 1; min-height: 0; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 7px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid #2a251c; }
-  th { position: sticky; top: 0; background: #2a251c; color: #cbbfa8; cursor: pointer; }
-  tr:hover td { background: #241f18; }
-  .buy { color: var(--buy); } .sell { color: var(--sell); } .hold { color: var(--hold); } .skip { color: var(--skip); }
+  th, td { padding: 10px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th { position: sticky; top: 0; background: #1e2522; color: var(--dim); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; }
+  tr:hover td { background: #202824; }
+  .buy { color: var(--green); } .sell { color: var(--sell); } .hold { color: var(--orange); } .skip { color: var(--skip); }
   .q0 { color: #c8c2b8; } .q1 { color: #7dcea0; } .q2 { color: #5dade2; }
   .q3 { color: #c39bd3; } .q4 { color: #e07a7a; } .q5 { color: #f0d78c; }
   .RANK_LEGEND { color: #e0b15a; } .RANK_MASTER { color: #e07a7a; } .RANK_VETERAN { color: #c4a3ff; }
   .RANK_STALKER { color: #8ebfff; } .RANK_NEWBIE { color: #9ddeaf; } .DEFAULT { color: var(--ink); }
-  #log { height: 70px; flex-shrink: 0; margin: 8px 16px 8px; overflow: auto; background: #100e0c; color: #d9d3c7; padding: 8px 10px; border-radius: 8px; font: 12px/1.4 Consolas, monospace; white-space: pre-wrap; }
-  .auc { display: grid; grid-template-columns: 340px 1fr; height: 100%; }
-  .side, .lots { overflow: auto; height: 100%; }
-  .side { border-right: 1px solid var(--line); }
-  .tools { display: flex; gap: 8px; align-items: center; padding: 8px; position: sticky; top: 0; background: var(--1b1814, #1b1814); z-index: 1; flex-wrap: wrap; }
-  .pick { cursor: pointer; }
-  .pick.on td { background: #3a3122; }
-  #lotinfo { color: #cbbfa8; padding: 4px 8px; }
-  .sub { display: flex; gap: 6px; padding: 0 8px; }
-  .sub button.on { color: var(--gold); }
-  .mapwrap { display: flex; flex-direction: column; height: 100%; }
-  #mapbar button.on, #maplayers button.on { background: var(--gold); color: #1a140c; }
+  #log { height: 64px; flex-shrink: 0; margin: 0 18px 10px; overflow: auto; background: #0e1211; color: #c5cdc8; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); font: 12px/1.4 Consolas, monospace; white-space: pre-wrap; }
+  .balance { margin-top: auto; margin: auto 12px 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: #0e1512; }
+  .balance span, .balance small { display: block; color: var(--dim); font-size: 12px; }
+  .balance b { display: block; margin: 4px 0; color: var(--green); font-size: 20px; }
+  .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
+  .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
+  .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+  .detail { border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
+  .filters h3, .detail h2 { margin: 4px 0; }
+  .filters label { color: var(--dim); font-size: 12px; }
+  .range { display: flex; gap: 8px; }
+  .range input { width: 100%; }
+  .results { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; gap: 8px; }
+  .result-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+  .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; }
+  .pick.on { border-color: var(--green); background: #14211b; }
+  .pick .avatar { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #101614; color: var(--green); font-weight: 700; flex-shrink: 0; }
+  .pick .who { display: flex; flex-direction: column; min-width: 0; }
+  .pick .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pick .who small, .found { color: var(--dim); }
+  .pick .watch { margin-left: auto; color: var(--orange); }
+  #lotinfo { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .sub { display: flex; gap: 6px; }
+  .sub button.on { color: #06210f; background: var(--green); }
+  .detail .sheet { background: var(--card); }
+  .tools { display: flex; gap: 8px; align-items: center; padding: 8px; flex-wrap: wrap; position: sticky; top: 0; z-index: 1; background: var(--side); }
+  .mapwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  #mapbar button.on, #maplayers button.on { background: var(--green); color: #06210f; }
+  #mapq { width: 180px; text-align: left; }
+  #wikimap { flex: 1; min-height: 0; background: #0e0c0a; }
+  #mapbar button.on, #maplayers button.on { background: var(--green); color: #06210f; }
   #mapq { width: 180px; text-align: left; }
   #wikimap { flex: 1; min-height: 0; background: #0e0c0a; }
 </style>
 </head>
-<body>
-<header>
-  <h1 class="pywebview-drag-region">STALZONE</h1>
+<body data-screen="buys">
+<header class="pywebview-drag-region">
+  <div class="compact-brand"><span class="logo">S</span><h1>STALZONE</h1></div>
+  <div id="status" role="status">ожидание</div>
   <button id="expand" title="Развернуть интерфейс">Развернуть</button>
   <button id="backgame" title="Вернуть управление игре (Esc)">В игру</button>
   <button id="closehud" aria-label="Закрыть оверлей">×</button>
 </header>
-<div id="status" role="status">ожидание</div>
 <div id="compact">
   <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th><th>В час</th></tr></thead><tbody id="deals"></tbody></table></div>
   <div class="compact-actions">
@@ -829,29 +870,58 @@ PAGE = r"""<!DOCTYPE html>
   </div>
 </div>
 <div id="full">
-<div class="bar">
-  <button class="gold" id="run">Прогон</button>
-  <button id="auto">Автопрогон</button>
-  <button id="live">Онлайн</button>
-  <span>каждые</span>
-  <input id="mins" value="30"/>
-  <span>мин</span>
-  <span>бюджет</span>
-  <input id="budget" value="5000000"/>
-  <button id="orderswitch2" data-order type="button">По часу</button>
-  <button class="stop" id="stop" disabled>Стоп</button>
-  <select id="section"></select>
-</div>
-<div class="tabs" id="tabs"></div>
-<main id="main"></main>
-<div id="log"></div>
+  <aside class="sidenav">
+    <div class="brand"><span class="logo">S</span><div><b>STALZONE</b><small>Аукцион</small></div></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="balance"><span>Бюджет на выкуп</span><b id="side-budget">5 000 000</b><small id="side-status">ожидание</small></div>
+  </aside>
+  <div class="workspace">
+    <div class="bar">
+      <button class="gold" id="run">Прогон</button>
+      <button id="auto">Автопрогон</button>
+      <button id="live">Онлайн</button>
+      <span>каждые</span>
+      <input id="mins" value="30"/>
+      <span>мин</span>
+      <span>бюджет</span>
+      <input id="budget" value="5000000"/>
+      <button id="orderswitch2" data-order type="button">По часу</button>
+      <button class="stop" id="stop" disabled>Стоп</button>
+      <select id="section"></select>
+    </div>
+    <div id="stats">
+      <div class="stat"><span>Лотов в бюджете</span><b id="stat-count">0</b></div>
+      <div class="stat"><span>Плюс</span><b id="stat-gain" class="green">0</b></div>
+      <div class="stat"><span>Бюджет</span><b id="stat-budget">5000000</b></div>
+      <div class="stat"><span>Рынок</span><b id="stat-live">ждёт</b></div>
+    </div>
+    <main id="main"></main>
+    <div id="log"></div>
+  </div>
 </div>
 <div id="hudhint">F10 — управление оверлеем</div>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
+const TAB_BLURB = {
+  buys: "Что купить и за сколько выставить. Плюс уже после 5%.",
+  farm: "Дорогой бартер: держать или слить.",
+  arsenal: "Арсенал. Цена, от которой есть смысл продавать.",
+  shelter_buy: "Материалы убежища, которые ещё имеет смысл брать.",
+  shelter_sell: "Готовое с убежища. Слить или подождать.",
+  consumables: "Еда, хилки и бафы.",
+  arts: "Популярные арты по той же цене, что и выкуп.",
+  protos: "Протоартефакты, если после комиссии есть запас."
+};
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
 const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain"};
 const $ = (id) => document.getElementById(id);
+
+function rubShort(n) {
+  n = Number(n) || 0;
+  if (n >= 1000000) return (n / 1000000).toFixed(2) + "кк";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "к";
+  return String(Math.round(n));
+}
 
 function compactRows(rows) {
   const list = (rows || []).slice().sort((a, b) => (state.order === "hour" ? (b.hour_n || 0) - (a.hour_n || 0) : (b.gain_n || 0) - (a.gain_n || 0))).slice(0, 5);
@@ -917,9 +987,9 @@ function build() {
     b.onclick = () => show(key);
     tabs.appendChild(b);
     const view = document.createElement("div");
-    view.className = "view sheet" + (n ? "" : " on");
+    view.className = "view" + (n ? "" : " on");
     view.id = "v-" + key;
-    view.innerHTML = `<div class="sheet" id="t-${key}"></div>`;
+    view.innerHTML = `<div class="page"><div class="page-head"><h2>${TAB_NAME[key]}</h2><p>${TAB_BLURB[key] || ""}</p></div><div class="sheet" id="t-${key}"></div></div>`;
     main.appendChild(view);
   });
   const b = document.createElement("button");
@@ -932,25 +1002,30 @@ function build() {
   view.id = "v-auc";
   view.innerHTML = `
     <div class="auc">
-      <div class="side">
-        <div class="tools">
-          <input id="q" placeholder="Поиск"/>
-          <select id="cat"></select>
-          <select id="asort"><option>По имени</option><option>По рангу</option></select>
-          <button id="fav">В избранное</button>
-        </div>
-        <div id="items"></div>
-      </div>
-      <div class="lots">
-        <div class="tools">
-          <span>Редкость</span><select id="lq"></select>
-          <span>Заточка</span><input id="lo" value="0" style="width:52px"/><span>—</span><input id="hi" value="15" style="width:52px"/>
-          <button class="gold" id="open">Открыть</button>
-        </div>
-        <div id="lotinfo">Каталог грузится при открытии вкладки.</div>
+      <aside class="filters">
+        <h3>Поиск</h3>
+        <input id="q" placeholder="Предмет или категория"/>
+        <label>Раздел</label>
+        <select id="cat"></select>
+        <label>Порядок</label>
+        <select id="asort"><option>По имени</option><option>По рангу</option></select>
+        <label>Редкость</label>
+        <select id="lq"></select>
+        <label>Заточка</label>
+        <div class="range"><input id="lo" value="0"/><input id="hi" value="15"/></div>
+        <button id="fav">В избранное</button>
+        <button class="gold" id="open">Открыть лот</button>
+      </aside>
+      <section class="results">
+        <div class="page-head"><h2>Аукцион</h2><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
+        <div id="items" class="result-list"></div>
+      </section>
+      <aside class="detail">
+        <h2 id="detail-name">Лот</h2>
+        <div id="lotinfo">Выбери предмет слева и открой лот. Здесь будет цена, медиана и почему его брать или нет.</div>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
         <div class="sheet" id="lotbox"></div>
-      </div>
+      </aside>
     </div>`;
   main.appendChild(view);
   const mapBtn = document.createElement("button");
@@ -1428,6 +1503,7 @@ function paintLunar() {
 }
 
 function show(key) {
+  document.body.dataset.screen = key;
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
@@ -1487,21 +1563,26 @@ function renderItems() {
   }
   if (q) items = items.filter(i => i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q));
   const shown = items.slice(0, 500);
-  $("lotinfo").textContent = `Найдено ${items.length}. Показано ${shown.length}. Клик по строке, потом «Открыть».`;
-  $("items").innerHTML = `<table><thead><tr><th>Предмет</th><th>Раздел</th><th>Ранг</th></tr></thead><tbody>${
-    shown.map(i => `<tr class="pick ${esc(i.color)} ${selected === i.id ? "on" : ""}" data-id="${esc(i.id)}"><td>${esc(i.name)}</td><td>${esc(i.cat)}</td><td>${esc(i.rank)}</td></tr>`).join("")
-  }</tbody></table>`;
-  $("items").querySelectorAll("tr.pick").forEach(tr => {
+  $("found").textContent = `Найдено ${items.length}. Показано ${shown.length}.`;
+  $("items").innerHTML = shown.map(i => {
+    const on = selected === i.id ? " on" : "";
+    const star = state.fav.has(i.id) ? "★" : "";
+    const letter = (i.name || "?").slice(0, 1);
+    return `<button type="button" class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}"><span class="avatar">${esc(letter)}</span><span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><span class="watch">${star}</span></button>`;
+  }).join("");
+  $("items").querySelectorAll(".pick").forEach(tr => {
     tr.onclick = () => {
       selected = tr.dataset.id;
-      $("items").querySelectorAll("tr.pick").forEach(row => row.classList.toggle("on", row.dataset.id === selected));
+      $("items").querySelectorAll(".pick").forEach(row => row.classList.toggle("on", row.dataset.id === selected));
+      const row = state.catalog.find(i => i.id === selected);
+      if (row && $("detail-name")) $("detail-name").textContent = row.name;
     };
     tr.ondblclick = () => { selected = tr.dataset.id; openItem(); };
   });
 }
 
 async function loadCatalog() {
-  $("lotinfo").textContent = "Читаю каталог EXBO…";
+  $("found").textContent = "Читаю каталог EXBO…";
   const data = await pywebview.api.load_catalog();
   state.catalog = data.items || [];
   const fav = await pywebview.api.favs();
@@ -1519,6 +1600,7 @@ async function openItem() {
   if (!selected) return;
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
+  $("detail-name").textContent = name;
   $("lotinfo").textContent = name + ": читаю лоты…";
   const data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value);
   if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; return; }
@@ -1544,7 +1626,7 @@ function wire() {
     if (!selected) return;
     const r = await pywebview.api.toggle_fav(selected);
     state.fav = new Set(r.ids || []);
-    if ($("cat").value === "fav") renderItems();
+    renderItems();
   };
   $("open").onclick = openItem;
   $("lq").onchange = $("lo").onchange = $("hi").onchange = async () => {
@@ -1561,6 +1643,16 @@ function wire() {
 async function tick() {
   const data = await pywebview.api.poll();
   $("status").textContent = data.status || "";
+  if ($("side-status")) $("side-status").textContent = data.status || "";
+  if ($("side-budget")) $("side-budget").textContent = $("budget").value || "";
+  if ($("stat-count")) {
+    const rows = data.compact || [];
+    const gain = rows.reduce((sum, row) => sum + (Number(row.gain_n) || 0), 0);
+    $("stat-count").textContent = String(rows.length);
+    $("stat-gain").textContent = rubShort(gain);
+    $("stat-budget").textContent = $("budget").value || "";
+    $("stat-live").textContent = data.busy ? "скан" : "ждёт";
+  }
   $("log").textContent = (data.logs || []).join("\n");
   $("log").scrollTop = $("log").scrollHeight;
   ["run","auto","live","mins","budget","section"].forEach(id => $(id).disabled = !!data.busy);
