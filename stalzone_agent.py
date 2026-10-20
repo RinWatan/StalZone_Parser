@@ -26,6 +26,10 @@ DIR = app_dir()
 EXBO = "https://eapi.stalzone.com"
 DB_ZIP = "https://codeload.github.com/EXBO-Studio/stalzone-database/zip/refs/heads/main"
 DB_LISTING = "https://raw.githubusercontent.com/EXBO-Studio/stalzone-database/main/ru/listing.json"
+DB_LISTINGS = (
+    "https://cdn.jsdelivr.net/gh/EXBO-Studio/stalzone-database@main/ru/listing.json",
+    DB_LISTING,
+)
 LOG = DIR / "stalzone_agent.log"
 BUY_HTML = DIR / "buy_now.html"
 COMM = 0.95
@@ -601,15 +605,26 @@ def _catalog_from_exbo():
 
 
 def _catalog_from_listing():
+    errors = []
+    for url in DB_LISTINGS:
+        try:
+            return _listing_from(url)
+        except Exception as exc:
+            errors.append(str(exc))
+            log(f"Список не открылся ({url}): {exc}")
+    raise RuntimeError(errors[-1] if errors else "список предметов пуст")
+
+
+def _listing_from(url):
     path = DIR / "catalog.json"
     stamp = DIR / "catalog.etag"
     headers = {"User-Agent": UA, "Accept": "application/json"}
-    if path.exists() and stamp.exists():
-        etag = stamp.read_text(encoding="utf-8").strip()
-        if etag:
-            headers["If-None-Match"] = etag
-    with httpx.Client(timeout=60, follow_redirects=True) as client:
-        res = client.get(DB_LISTING, headers=headers)
+    saved = stamp.read_text(encoding="utf-8").splitlines() if stamp.exists() else []
+    if path.exists() and len(saved) >= 2 and saved[0].strip() == url and saved[1].strip():
+        headers["If-None-Match"] = saved[1].strip()
+    timeout = httpx.Timeout(20.0, connect=8.0)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        res = client.get(url, headers=headers)
     if res.status_code == 304:
         log("База предметов не менялась, архив заново не качаю")
         return None
@@ -617,7 +632,7 @@ def _catalog_from_listing():
     items = _items_in_listing(res.json())
     etag = (res.headers.get("etag") or "").strip()
     if etag and items:
-        stamp.write_text(etag, encoding="utf-8")
+        stamp.write_text(url + "\n" + etag + "\n", encoding="utf-8")
     return items
 
 
