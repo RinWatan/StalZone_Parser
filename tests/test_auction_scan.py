@@ -172,6 +172,56 @@ class ScanTests(unittest.TestCase):
             self.assertEqual(a._buy_one(self.item),[])
             book.assert_not_called()
 
+    def test_art_tab_uses_the_buy_floor(self):
+        now=time.time()
+        sales=[(1,100000,now-i*600) for i in range(8)]
+        book={'sales':{(3,0):sales},'live':{}}
+        a._LIVE['gyq5']=[{'amount':1,'buyoutPrice':92000,'additional':{'qlt':3,'ptn':0}}]
+        with patch.object(a,'market_book',return_value=book):
+            self.assertEqual(a._art_one(('gyq5','Спираль')),[])
+        a._LIVE['gyq5']=[{'amount':1,'buyoutPrice':80000,'additional':{'qlt':3,'ptn':0}}]
+        with patch.object(a,'market_book',return_value=book):
+            rows=a._art_one(('gyq5','Спираль'))
+        self.assertEqual(rows[0]['liq'],'ВЫКУПИТЬ')
+        self.assertGreaterEqual(rows[0]['net'], a.TRACKER_MIN)
+
+    def test_open_item_names_the_median_and_the_floor(self):
+        now=time.time()
+        lots=[{'amount':1,'buyoutPrice':92000,'additional':{'qlt':3,'ptn':0}}]
+        sales={(3,0):[(1,100000,now-i*600) for i in range(8)]}
+        text=a.flip_reason('gyq5','Спираль',lots,sales,True)
+        self.assertIn('92000', text)
+        self.assertIn('100000', text)
+        self.assertIn(str(a.TRACKER_MIN), text)
+        self.assertIn('после 5%', text)
+
+    def test_favourite_skips_the_category_block(self):
+        catalog=[
+            {'id':'mod','name':'Подвижный','cat':'weapon_modules','color':'DEFAULT'},
+            {'id':'dust','name':'Пыль','cat':'bullet','color':'DEFAULT'},
+            {'id':'art','name':'Гребешок','cat':'artefact','color':'DEFAULT'},
+            {'id':'med','name':'Бинт','cat':'medicine','color':'DEFAULT'},
+        ]
+        with patch.object(a,'auction_listing',return_value=catalog), patch.object(a,'quiet_lots',return_value=set()), patch.object(a,'_off_auction',return_value=set()):
+            plain=[row[0] for row in a.buy_targets()]
+            starred=[row[0] for row in a.buy_targets(['mod','dust'])]
+        self.assertNotIn('mod', plain)
+        self.assertNotIn('dust', plain)
+        self.assertLess(starred.index('art'), starred.index('mod'))
+        self.assertLess(starred.index('art'), starred.index('dust'))
+        self.assertIn('med', starred)
+
+    def test_favourite_is_not_muted_after_an_empty_lot(self):
+        catalog=[{'id':'mod','name':'Подвижный','cat':'weapon_modules','color':'DEFAULT'}]
+        with patch.object(a,'auction_listing',return_value=catalog), patch.object(a,'quiet_lots',return_value={'mod'}), patch.object(a,'_off_auction',return_value=set()):
+            self.assertEqual(a.buy_targets(),[])
+            self.assertEqual(a.buy_targets(['mod'])[0][0],'mod')
+
+    def test_missing_item_stays_out_even_if_favourite(self):
+        catalog=[{'id':'mod','name':'Подвижный','cat':'weapon_modules','color':'DEFAULT'}]
+        with patch.object(a,'auction_listing',return_value=catalog), patch.object(a,'quiet_lots',return_value=set()), patch.object(a,'_off_auction',return_value={'mod'}):
+            self.assertEqual(a.buy_targets(['mod']),[])
+
 class RetryTests(unittest.TestCase):
     def setUp(self):
         self.old_gap,self.old_next=a._GAP,a._NEXT_AT

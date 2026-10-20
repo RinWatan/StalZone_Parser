@@ -416,10 +416,16 @@ class Bridge:
         with self.lock:
             self.tables.update(fresh)
             if 'buys' in data:
-                deals = sorted(data.get('buys') or [], key=lambda r: r.get('gain', 0), reverse=True)
-                self._compact = [{'name': r['name'], 'price': r.get('plan') or money(r['buyout']),
-                                  'gain': money(r['gain']), 'copies': r['copies']}
-                                 for r in deals[:5]]
+                deals = list(data.get('buys') or [])
+                self._compact = [{
+                    'name': r['name'],
+                    'price': r.get('plan') or money(r['buyout']),
+                    'gain': money(r['gain']),
+                    'gain_n': float(r.get('gain') or 0),
+                    'hour': money(r.get('hour_gain') or 0),
+                    'hour_n': float(r.get('hour_gain') or 0),
+                    'copies': r['copies'],
+                } for r in deals]
             self.rev += 1
 
     def hud_action(self, action):
@@ -570,7 +576,7 @@ class Bridge:
                     def on_update(deals, done, total):
                         self._show({"buys": list(deals)})
                         self.note(f"Выкуп {done}/{total}, в таблице {len(deals)}")
-                    data = agent.run_once(status=self.note, only=only, budget=budget, on_update=on_update if only == "buys" else None)
+                    data = agent.run_once(status=self.note, only=only, budget=budget, on_update=on_update if only == "buys" else None, favs=sorted(self.fav))
                 except Exception as e:
                     self.note(f"Ошибка: {e}")
                     data = {}
@@ -670,7 +676,7 @@ class Bridge:
         self._write_json("auction_recent.json", self.recent)
         self.note(f"{name}: читаю лоты…")
         try:
-            data = agent.item_view(slug)
+            data = agent.item_view(slug, name or "")
         except Exception as e:
             self.note(f"Ошибка: {e}")
             return {"ok": False, "error": str(e)}
@@ -714,6 +720,8 @@ class Bridge:
         cheap = min(priced) if priced else 0
         info = f"На аукционе {data['total']}, показано {len(lots)}. "
         info += f"Самый дешёвый выкуп {money(cheap)} за штуку." if cheap else "С выкупом ничего нет."
+        if data.get("verdict"):
+            info += " " + data["verdict"]
         if name:
             info = f"{name}: {info}"
             self.note(info)
@@ -812,9 +820,10 @@ PAGE = r"""<!DOCTYPE html>
 </header>
 <div id="status" role="status">ожидание</div>
 <div id="compact">
-  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th></tr></thead><tbody id="deals"></tbody></table></div>
+  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th><th>В час</th></tr></thead><tbody id="deals"></tbody></table></div>
   <div class="compact-actions">
     <button class="gold" id="quickrun">Прогон</button>
+    <button id="orderswitch" data-order type="button">По часу</button>
     <button class="stop" id="quickstop" disabled>Стоп</button>
     <button id="quickmap">Карта</button>
   </div>
@@ -829,6 +838,7 @@ PAGE = r"""<!DOCTYPE html>
   <span>мин</span>
   <span>бюджет</span>
   <input id="budget" value="5000000"/>
+  <button id="orderswitch2" data-order type="button">По часу</button>
   <button class="stop" id="stop" disabled>Стоп</button>
   <select id="section"></select>
 </div>
@@ -840,8 +850,22 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain"};
 const $ = (id) => document.getElementById(id);
+
+function compactRows(rows) {
+  const list = (rows || []).slice().sort((a, b) => (state.order === "hour" ? (b.hour_n || 0) - (a.hour_n || 0) : (b.gain_n || 0) - (a.gain_n || 0))).slice(0, 5);
+  return list.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td><td>${esc(r.hour || "")}</td></tr>`).join("") ||
+    '<tr><td colspan="4">Прогон найдёт подходящие лоты</td></tr>';
+}
+
+function setOrder(mode) {
+  state.order = mode;
+  const hour = mode === "hour";
+  document.querySelectorAll("[data-order]").forEach(b => { b.textContent = hour ? "По плюсу" : "По часу"; });
+  state.sort.buys = {i: hour ? 10 : 7, desc: true};
+  if ($("t-buys")) paint("buys");
+}
 
 function sortValue(text) {
   const raw = String(text ?? "").trim().replace(/ /g, "").replace(",", ".").toLowerCase();
@@ -1551,8 +1575,7 @@ async function tick() {
   $("hudhint").textContent = !hud.hotkey ? "Горячая клавиша занята другой копией — закройте её и перезапустите оверлей" :
     (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
     (hud.game ? "" : " · окно игры не найдено");
-  $("deals").innerHTML = (data.compact || []).map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.price)}</td><td>${esc(r.gain)}</td></tr>`).join("") ||
-    '<tr><td colspan="3">Прогон найдёт подходящие лоты</td></tr>';
+  $("deals").innerHTML = compactRows(data.compact);
   $("deals").querySelectorAll("tr").forEach(tr => {
     const name = tr.cells[0] ? tr.cells[0].textContent : "";
     if (name && tr.cells.length > 1) tr.onclick = () => pywebview.api.game_search(name);
@@ -1581,6 +1604,7 @@ window.addEventListener("pywebviewready", async () => {
   $("quickmap").onclick = async () => { await pywebview.api.hud_action("full"); await tick(); show("map"); };
   $("quickrun").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, "Выкуп");
   $("quickstop").onclick = () => pywebview.api.stop_run();
+  document.querySelectorAll("[data-order]").forEach(b => b.onclick = () => setOrder(state.order === "hour" ? "gain" : "hour"));
   document.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); pywebview.api.hud_action("passive"); } });
   TAB_ORDER.forEach(paint);
   setInterval(tick, 400);

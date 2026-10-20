@@ -25,8 +25,6 @@ def app_dir():
 DIR = app_dir()
 EXBO = "https://eapi.stalzone.com"
 DB_ZIP = "https://codeload.github.com/EXBO-Studio/stalzone-database/zip/refs/heads/main"
-HTML = DIR / "stalzone_agent.html"
-TXT = DIR / "stalzone_agent.txt"
 LOG = DIR / "stalzone_agent.log"
 BUY_HTML = DIR / "buy_now.html"
 COMM = 0.95
@@ -36,10 +34,7 @@ HALT = threading.Event()
 WORKERS = 4
 AUCTION_WORKERS = 8
 _LOG_LOCK = threading.Lock()
-_HIST = {}
-_HIST_LOCK = threading.Lock()
 BUDGET = 5_000_000
-BUY_AT = 0.85
 
 
 # Дорогой бартер: фиолетовый (ветеран) и красный (мастер), север и Любеч.
@@ -59,316 +54,6 @@ BARTER_FARM = [
     ("y409k", "Блок данных «Гамма»"),
     ("y4y33", "Блок данных «Лямбда»"),
 ]
-FARM = [
-    ("7l127", "Аномальная пыль", "пыль"),
-    ("gn956", "Камень Жмых-Вжух-Плюх", "пачка"),
-    ("9dk7y", "Пси-маячок", "пачка"),
-    ("gn975", "Портативный квантовый генератор", "пачка"),
-    ("55621", "Армейский аккумулятор", "пачка"),
-    ("olz36", "Моток медной проволоки", "пачка"),
-    ("z301y", "Цветущий северный мох", "пачка"),
-    ("77oy6", "Остатки сигнального процессора", "пачка"),
-    ("y40kk", "Крупный рассольник", "пачка"),
-    ("009n9", "Полыхающий срачник", "пачка"),
-    ("gn976", "Очищенное вещество 07270", "пачка"),
-    ("4k5gr", "Блок данных «Альфа»", "пачка"),
-    ("y409k", "Блок данных «Гамма»", "пачка"),
-    ("dr61j", "Блок данных «Бета»", "пачка"),
-    ("y4y33", "Блок данных «Лямбда»", "пачка"),
-    ("gnpr5", "Темный Лимб", "пачка"),
-    ("4k3qo", "Концентрированная лимбоплазма", "пачка"),
-    ("w3zj3", "Модифицированная аномальная батарея", "пачка"),
-    ("z30yy", "Камышовый грибок", "пачка"),
-    ("kr53y", "Корень-липучка", "пачка"),
-    ("34z1l", "Чернобыльская ромашка", "пачка"),
-    ("z30my", "Цветущий рыжий папоротник", "пачка"),
-    ("gn9y6", "Камень Водяного", "пачка"),
-    ("z3ogm", "Расцветший Горьколистник", "пачка"),
-]
-FLIP = [
-    ("y3nmw", "Продвинутые запчасти"),
-    ("4q7pl", "Продвинутые инструменты"),
-    ("40vn", "Аммиак"),
-    ("3gqkg", "Нестабильная аномальная батарея"),
-    ("3gq6k", "Набор компонентов оружия (Мастер)"),
-    ("2d56", "Набор болтов"),
-    ("npq3", "Аномальная плазма"),
-]
-
-# Арсенал и материалы убежища: сливать нафармленное или держать.
-ARSENAL_ITEMS = [
-    ("4q7pl", "Продвинутые инструменты"),
-    ("y3nmw", "Продвинутые запчасти"),
-    ("y7po", "Реагенты"),
-    ("knydy", "Ящик гранат «Завеса»"),
-    ("lyrdq", "Сумка СБП 9x39 мм"),
-    ("n46d1", "Ящик гранат «Вонючка»"),
-    ("lywdk", "Ящик гранат «Напалм»"),
-    ("2d56", "Набор болтов"),
-    ("1r0gg", "Сумка керамических пластин IV"),
-    ("1dnq", "Тканевая сумка"),
-    ("0ngy", "Керамическая пластина IV"),
-    ("wodp", "Электросмесь"),
-    ("m0wdy", "Ящик гранат «Подорожник»"),
-    ("qjq69", "Сумка СБП 5.56 мм"),
-    ("j5qd4", "Сумка СБП 7.62 мм"),
-    ("wwod", "M18 Claymore"),
-    ("9mmq", "Мякоть солевика"),
-    ("4nkr", "Алюминиевый порошок"),
-    ("6wmkp", "Ящик гранат «Кустарник-1»"),
-    ("1d56", "Щепки"),
-    ("knpd3", "Сумка СБП 5.45 мм"),
-    ("4q7yl", "Сумка СБП 9 мм"),
-    ("j5pd0", "Ящик гранат «Гром»"),
-    ("y7dz", "Морозная смесь"),
-    ("n4w7w", "Сумка зажигательных 7.62 мм"),
-    ("jl44", "Серная кислота"),
-    ("404p", "Термическая смесь"),
-    ("j0w96", "Дешевые запчасти"),
-    ("km9v", "Коагулянт"),
-    ("p6kgw", "Сумка 12.7 мм Easy mode"),
-    ("qvm9", "Азотная кислота"),
-    ("q2yj", "Крепкая сталь"),
-    ("z719", "Сталь"),
-    ("wjlrd", "Дешевые инструменты"),
-    ("96qll", "Ящик самодельных светошумов"),
-    ("2o65l", "Сумка 5.56 мм «Прогрев»"),
-    ("0rlzr", "Сумка зажигательных 12х76 мм"),
-    ("r22z", "Ноотроп"),
-    ("vj3zg", "Сумка бронебойных 5.56 мм"),
-    ("m2lr", "Карбоноволокно"),
-    ("5lqp1", "Сумка зажигательных 9x39 мм"),
-    ("g4rd6", "Сумка керамических пластин V"),
-    ("1731", "Кевлар"),
-    ("rwl5v", "Сумка 5.56 «Курчатов»"),
-    ("l2oo", "Зажигательное покрытие"),
-    ("vrld", "Консервная банка"),
-    ("wo2d", "Хлор"),
-    ("qjl6j", "Ящик гранат «Искра»"),
-    ("ovo4", "Абразив"),
-    ("qjlzj", "Сумка СЭП 7.62 мм"),
-    ("prm6", "Свинец"),
-    ("999q", "Плитоноска"),
-    ("96qjl", "Сумка керамических пластин III"),
-    ("okq16", "Сумка 9 мм «Сосуля»"),
-    ("wjn52", "Сумка композитных пластин IV"),
-    ("nvpw", "СЗГ «Вспышка»"),
-    ("kmmj", "Промышленный растворитель"),
-    ("q224", "Нитроглицерин"),
-    ("y31mk", "Сумка СЭП 9 мм"),
-    ("0rwg9", "Сумка взрывных 10 мм"),
-    ("y31lk", "Ящик самодельных мини-гранат"),
-    ("z2om", "Дымный порох"),
-    ("okp74", "Сумка зажигательных 5.56 мм"),
-    ("kny0y", "Сумка СЭП 5.56 мм"),
-    ("7l4q6", "Ящик кустарных гранат"),
-    ("g325", "Стальная пластина III"),
-    ("gm2p", "Нитрожелатин"),
-    ("4qzpr", "Сумка СЭП 5.45 мм"),
-    ("2o6zl", "Сумка стальных пластин IV"),
-    ("zj9m", "Стальная пластина IV"),
-    ("z7d2", "Кислота"),
-    ("1r0zg", "Ящик кустарных ВОГ-25"),
-    ("03zd", "Амортизирующее покрытие"),
-    ("z29n", "Динамит"),
-    ("rg5y", "Керамическая пластина III"),
-    ("dmlwj", "Сумка дальнобойных 9x39 мм"),
-    ("wjnq2", "Ящик кустарных осколочных гранат"),
-    ("5n51", "Порох"),
-    ("m0q7r", "Сумка зажигательных 5.45 мм"),
-    ("z3oln", "Сумка снайперских 12.7 мм"),
-    ("m0woy", "Сумка 7.62 мм «Динозавр»"),
-    ("jon0", "Нашатырь"),
-    ("j5pr0", "Сумка СЭП 9x39 мм"),
-    ("7l1z6", "Сумка Баррикад"),
-    ("vjqkr", "Сумка дальнобойных 9 мм"),
-    ("okp24", "Сумка бронебойных 9 мм"),
-    ("km6y", "Серная соль"),
-    ("3g0yl", "Сумка патронов 12 калибра «Кислотный дракон»"),
-    ("5np0", "Мутировавшие ферменты"),
-    ("lywmk", "Сумка 5.45 «Ши-3»"),
-    ("99n0", "Полиуретан"),
-    ("dmyd9", "Сумка бронебойных 7.62 мм"),
-    ("rwv7l", "Сумка зажигательных 9 мм"),
-    ("g4r26", "Сумка бронебойных 10 мм"),
-    ("zzg9y", "Сумка СБП 10 мм"),
-    ("w732", "Селитра"),
-    ("p6qd5", "Сумка бронебойных 5.45 мм"),
-    ("n4wdw", "Сумка боевых пуль 12х76 мм"),
-    ("dmldj", "Сумка стальных пластин III"),
-    ("4nnj", "Гремучая ртуть"),
-    ("2o0zm", "Сумка СП-6 9x39 мм"),
-    ("zzgry", "Ящик самодельных M381"),
-    ("z22k", "Пуля"),
-    ("y31wk", "Сумка композитных пластин III"),
-    ("wjnr2", "Сумка СЭП 10 мм"),
-    ("n4691", "Сумка 9x39 мм «Электросвинг»"),
-    ("knp93", "Особые инструменты"),
-    ("gmmn", "Гильза"),
-    ("g4rz0", "Самодельный светошум"),
-    ("g4rq6", "Ящик кустарных ВОГ-25П"),
-    ("5nno", "Крупнокалиберная пуля"),
-    ("5lq41", "Ящик самодельных M397"),
-    ("4qzyr", "Сумка композитных пластин V"),
-    ("3g05l", "Сумка стальных пластин V"),
-    ("2o0vl", "Сумка боевых пуль 23х75 мм"),
-    ("1r0y6", "Ручная граната «Кустарник-1»"),
-    ("1r03g", "Сумка зажигательных 10 мм"),
-    ("194j1", "Сумка патронов 12.7 мм"),
-]
-
-SHELTER_ITEMS = [
-    ("gn976", "Очищенное вещество 07270"),
-    ("9dk7y", "Пси-маячок"),
-    ("gn975", "Портативный квантовый генератор"),
-    ("w39k3", "Огромный артефактный фрагмент"),
-    ("z7pn", "Ткань"),
-    ("55621", "Армейский аккумулятор"),
-    ("g4lzg", "Водка «Гейзер»"),
-    ("55ymq", "Обычный артефактный фрагмент"),
-    ("wj2zp", "Чесночный суп"),
-    ("009n9", "Полыхающий срачник"),
-    ("pjkj2", "Экранированный схрон ветерана"),
-    ("wogp", "Доски"),
-    ("1r2l6", "«Астрикцин»"),
-    ("gnpr5", "Темный Лимб"),
-    ("40vn", "Аммиак"),
-    ("p62q6", "Морфин"),
-    ("2d76", "Мясо кабана"),
-    ("9mr0", "Жгут"),
-    ("1r2yq", "Силовой стимулятор"),
-    ("y39yz", "Гороховый суп"),
-    ("77oy6", "Остатки сигнального процессора"),
-    ("5logg", "Странный артефакт"),
-    ("6w59j", "«УДАР»"),
-    ("qjmjk", "Боевой горох"),
-    ("55olq", "Остатки приборов «Шепота»"),
-    ("g4lz0", "«Биозаплатка»"),
-    ("5lo3o", "Копыто сильного кабана"),
-    ("mm4y", "Продвинутый электрод"),
-    ("vjy3n", "Эпинефрин"),
-    ("96zjw", "Подсумок с аптечками ученых"),
-    ("dm1ln", "Красная икра"),
-    ("7l9l7", "Холодец «Копытом по лицу»"),
-    ("96z7y", "Катализатор"),
-    ("964ow", "Энергетик «Батарейка»"),
-    ("1r216", "«ТОПОТ»"),
-    ("7lyo3", "«Алкобык»"),
-    ("pry2", "Пластиковая бутылка"),
-    ("y3knz", "«Убийца Боли»"),
-    ("z3ozm", "«Светящийся сахар»"),
-    ("7l127", "Аномальная пыль"),
-    ("rr7g", "Медь"),
-    ("vnqnd", "Экранированный схрон мастера"),
-    ("7rp7", "Чеснок"),
-    ("401j", "Батарея холодного синтеза"),
-    ("zzqn9", "Коктейль «Незабываемый»"),
-    ("2nw5", "Защитное покрытие"),
-    ("l0ryo", "Черная селезенка"),
-    ("prl2", "Кофе"),
-    ("g060", "Набор для шитья"),
-    ("6w5lj", "«Шизоерш»"),
-    ("3g1zz", "«Субтропики»"),
-    ("g4lp0", "Измененный сидр"),
-    ("p3o4", "Роторная система"),
-    ("ov50", "Сковорода"),
-    ("5l23g", "Солянка"),
-    ("jlll", "Алые минералы"),
-    ("7l1kr", "Подсумок с аптечками проводника"),
-    ("zzqn2", "Нейротоник"),
-    ("mrwr7", "Схрон мастера"),
-    ("prrd", "Янтарная полынь"),
-    ("v25p", "Операционный усилитель"),
-    ("drmwj", "Технический спирт"),
-    ("m22k", "Водонос"),
-    ("rrrz", "Бледнолист"),
-    ("q2p3", "Полипропилен"),
-    ("klwv", "Нефть"),
-    ("4k3qo", "Концентрированная лимбоплазма"),
-    ("dryl2", "Селезенка мутанта из Любеча"),
-    ("rwow5", "Бутылка чистой воды"),
-    ("zzwmm", "Сыворотка изменения"),
-    ("m0pyj", "Аномальное шампанское"),
-    ("npp9", "Чертоцвет"),
-    ("jl77", "Железо"),
-    ("kl9v", "Молоко"),
-    ("1rlw2", "Эссенция сброса"),
-    ("g4lk0", "Военная аптечка"),
-    ("9d3gy", "Медная катушка"),
-    ("m27j", "Аминокислота"),
-    ("rr05", "Дрожжи"),
-    ("p3vw", "Электродвигатель"),
-    ("y7rw", "Детали электромотора"),
-    ("y40kk", "Крупный рассольник"),
-    ("1dk6", "Набор специй"),
-    ("jl26", "Полимеры"),
-    ("olz36", "Моток медной проволоки"),
-    ("jl66", "Защитное снаряжение"),
-    ("3rpg", "Полутухлая рыба"),
-    ("dq2n", "Мультитул"),
-    ("4qd3p", "Уха из сома «Дворянская»"),
-    ("npq3", "Аномальная плазма"),
-    ("033k", "Кислотная крапива"),
-    ("m2g7", "Текстолит"),
-    ("g0gp", "Гнилые доски"),
-    ("wokd", "Смазочные материалы"),
-    ("p6256", "«Панацея»"),
-    ("40rl", "Разделочная доска"),
-    ("rjvwy", "Сердце Лимб"),
-    ("dm165", "Макароны по-флотски"),
-    ("g00n", "Мякоть сластены"),
-    ("5drg", "Брага"),
-    ("3g12z", "Жаркое из мутантов"),
-    ("kllj", "Лазурные минералы"),
-    ("19on2", "Трансформатор"),
-    ("w3923", "Сменный аккумулятор"),
-    ("964k0", "Сильная мазь от ожогов"),
-    ("lll2", "Золотые минералы"),
-    ("ovv5", "Гнозис"),
-    ("99dl", "Фреза"),
-    ("5njq", "Алюминий"),
-    ("6rpy", "Помидор"),
-    ("lynkj", "Энергетик «Жидень EXTRA»"),
-    ("ly6w1", "Бутерброд с колбасой"),
-    ("dj92", "Набор кухонных ножей"),
-    ("z3k1m", "Малый артефактный фрагмент"),
-    ("96z2z", "Хронопыль"),
-    ("z77k", "Мякоть спиртня"),
-    ("rwol5", "Консервированная фасоль"),
-    ("5lzyg", "«Гемостат»"),
-    ("03p1", "Газовый баллон"),
-    ("40lp", "Микроэлектроника"),
-    ("y391o", "Колбасная нарезка"),
-    ("qvwk", "Клей"),
-    ("00w01", "Схрон ветерана"),
-    ("03v1", "Колба с раствором"),
-    ("qvv4", "Пурпурные минералы"),
-    ("4qdqn", "Отечественный ИРП"),
-    ("5ddo", "Мякоть куборбуза"),
-    ("y770", "Мякоть лимонника"),
-    ("wo6z", "Адронный конвертор"),
-    ("5dm4", "Контрольная плата"),
-    ("1rn01", "Кусок черного хлеба"),
-    ("m2k7", "Глаз зомби"),
-    ("1ddr", "Мякоть мятноплода"),
-    ("1d31", "Банка с фасолью"),
-    ("nmj1", "Листы сваренного металла"),
-    ("j5mg7", "Игристое шампанское"),
-    ("r2mv", "Вино с осадком"),
-    ("77w9j", "Резонатор"),
-    ("npz3", "Кастрюля"),
-    ("dq0n", "Мясо хрюши"),
-    ("7ly13", "Аптечка проводника"),
-    ("99pz", "Полиэтиленовая основа"),
-    ("5dp0", "Банка с пшеном"),
-    ("j5456", "Отличная тушенка"),
-    ("dqn9", "Аномальные материалы"),
-    ("rwoj5", "Лимон"),
-    ("gmy0", "Очищающий реагент"),
-    ("qvrk", "Борная кислота"),
-    ("y220", "Адреналин"),
-]
-
 ARSENAL = [
     ("4k5gr", "Блок данных «Альфа»"),
     ("dr61j", "Блок данных «Бета»"),
@@ -426,7 +111,6 @@ ARSENAL = [
     ("pjn64", "Ящик с ресурсами (ветеран)"),
     ("n96ww", "Ящик с ресурсами (сталкер)"),
 ]
-SHELTER = SHELTER_ITEMS
 
 SHELTER_BUY = [
     ("z7pn", "Ткань"),
@@ -575,9 +259,6 @@ ARTS = [
     ("1k96", "Трещотка"), ("qo59", "Жвачка"), ("kqj3", "Улитка"),
 ]
 QLT = ["Обычный", "Необычный", "Особый", "Редкий", "Исключительный", "Легендарный"]
-ART_MIN_SALES = 6
-ART_MIN_NET = 8000
-ART_MARGIN = 1.12
 
 
 def log(msg):
@@ -600,17 +281,6 @@ def rub(n):
     return f"{n:.0f}"
 
 
-def history_json(slug):
-    with _HIST_LOCK:
-        cached = _HIST.get(slug)
-    if cached is not None:
-        return cached
-    data = get_json(f"{EXBO}/RU/auction/{slug}/history?additional=true&limit=200&offset=0")
-    with _HIST_LOCK:
-        _HIST[slug] = data
-    return data
-
-
 def parallel(items, fn):
     results = [None] * len(items)
     if not items or HALT.is_set():
@@ -626,70 +296,6 @@ def parallel(items, fn):
     return results
 
 
-def hist(slug):
-    data = history_json(slug)
-    prices = []
-    for p in data.get("prices") or []:
-        amt = max(p.get("amount") or 1, 1)
-        prices.append(p["price"] / amt)
-    if not prices:
-        return None
-    top = prices[:30]
-    return {
-        "last": top[0],
-        "med": statistics.median(top),
-        "mn": min(top),
-        "mx": max(top),
-        "prices": prices,
-    }
-
-
-def farm_action(kind, last, med):
-    if last < med * 0.9:
-        return "ДЕРЖАТЬ", "last ниже медианы на 10%+"
-    if kind == "пыль":
-        return "СЛИТЬ 3000", f"на руки ~{rub(3000 * last * COMM)}"
-    return "СЛИТЬ ПАЧКОЙ", f"цель {rub(med)}"
-
-
-def flip_action(last, med):
-    if last <= med * 0.85:
-        return "БРАТЬ", "спред после 5% ок"
-    return "НЕ ТРОГАТЬ", "тонкий спред"
-
-
-def art_history(slug):
-    """Последние выкупленные лоты напрямую с EXBO."""
-    out = []
-    for page in range(5):
-        if HALT.is_set():
-            break
-        data = get_json(f"{EXBO}/RU/auction/{slug}/history?additional=true&limit=200&offset={page * 200}")
-        batch = data.get("prices") or []
-        out.extend(batch)
-        if len(batch) < 200:
-            break
-    return out
-
-
-def sale_points(prices):
-    out = []
-    for p in prices:
-        amt = max(int(p.get("amount") or 1), 1)
-        add = p.get("additional") or {}
-        qlt = add.get("qlt")
-        ptn = add.get("ptn")
-        qlt = 0 if qlt is None else int(qlt)
-        ptn = 0 if ptn is None else int(ptn)
-        if ptn < 0 or ptn > 15:
-            continue
-        price = p.get("price")
-        if not price:
-            continue
-        out.append((price / amt, qlt, ptn))
-    return out
-
-
 def qlabel(qlt, ptn):
     qname = QLT[qlt] if 0 <= qlt < len(QLT) else f"qlt {qlt}"
     return f"{qname} +{ptn}"
@@ -698,35 +304,21 @@ def qlabel(qlt, ptn):
 def _art_one(item):
     slug, name = item
     try:
-        book = market_book(slug, 4)
+        deals = find_flips(market_book(slug, 4), slug, name, allow_single=True, limit=12)
     except Exception as e:
         return [{"name": name, "err": str(e)}]
     rows = []
-    for key, prices in book["sales"].items():
-        if not key:
-            continue
-        got = usual_sale(prices)
-        bought = book["live"].get(key)
-        if not got or not bought:
-            continue
-        last, sold, n = got
-        net = sold * COMM - bought
-        roi = net / bought if bought else 0
-        samples = [(row[1], row[2]) for row in prices if len(row) > 2]
-        alive = _fair_exit(samples, time.time(), 4)
-        if bought and roi >= 0.06 and net >= ART_MIN_NET and alive and alive[1] >= 0.5:
-            liq = "ВЫКУПИТЬ"
-        elif bought >= sold * 1.15 and n >= 12:
-            liq = "ДОРОГО"
-        else:
-            continue
-        if not isinstance(key, tuple) or len(key) != 2:
-            continue
-        qlt, ptn = key
+    for deal in deals:
         rows.append({
-            "name": name, "qlt": QLT[qlt] if 0 <= qlt < len(QLT) else str(qlt), "ptn": f"+{ptn}", "qlt_i": qlt, "n": n,
-            "cheap": bought, "med": sold,
-            "hand": sold * COMM, "net": net, "liq": liq,
+            "name": name,
+            "qlt": deal.get("qlt") or "—",
+            "ptn": deal.get("ptn") or "—",
+            "qlt_i": deal.get("qlt_i"),
+            "n": deal.get("n") or 0,
+            "cheap": deal["unit"],
+            "med": deal["med"],
+            "net": deal["profit"],
+            "liq": "ВЫКУПИТЬ",
         })
     return rows
 
@@ -744,312 +336,6 @@ def art_deals():
             checked += 1
     rows.sort(key=lambda r: (0 if r.get("liq") == "ВЫКУПИТЬ" else 1, -(r.get("net") or 0)))
     return rows[:80], checked
-
-
-def hist_timed(slug, max_pages, enough=None):
-    raw = []
-    for page in range(max_pages):
-        if HALT.is_set():
-            break
-        data = get_json(f"{EXBO}/RU/auction/{slug}/history?additional=true&limit=200&offset={page * 200}")
-        batch = data.get("prices") or []
-        if not batch:
-            break
-        raw.extend(batch)
-        if enough is not None:
-            probe = []
-            for p in raw:
-                t = datetime.fromisoformat(p["time"].replace("Z", "+00:00")).astimezone(MSK)
-                probe.append(t)
-            if enough(probe):
-                break
-        if len(batch) < 200:
-            break
-    out = []
-    for p in raw:
-        amt = max(p.get("amount") or 1, 1)
-        t = datetime.fromisoformat(p["time"].replace("Z", "+00:00")).astimezone(MSK)
-        out.append((t, p["price"] / amt))
-    out.sort(key=lambda x: x[0])
-    return out
-
-
-def _clip(prices):
-    if len(prices) < 20:
-        return list(prices)
-    s = sorted(prices)
-    lo = s[int(len(s) * 0.05)]
-    hi = s[min(len(s) - 1, int(len(s) * 0.95))]
-    return [p for p in prices if lo <= p <= hi]
-
-
-def buy_check(prices, hours=None, min_n=20):
-    clean = _clip(prices)
-    if len(clean) < min_n:
-        return {
-            "liq": "НЕ СКУПАТЬ",
-            "low": min(prices) if prices else 0,
-            "avg": 0,
-            "per_h": 0,
-            "n": len(clean),
-            "note": "мало продаж, выкуп зависнет",
-        }
-    ordered = sorted(clean)
-    low = ordered[max(0, int(len(ordered) * 0.1) - 1)]
-    avg = statistics.mean(clean)
-    per_h = len(clean) / hours if hours and hours > 0 else 0
-    net = avg * COMM - low
-    margin = net / low if low else 0
-    if hours and per_h < 4:
-        liq = "НЕ СКУПАТЬ"
-        note = f"{per_h:.0f} продаж/час, сливать будет некуда"
-    elif margin < 0.08:
-        liq = "НЕ СКУПАТЬ"
-        note = f"низ {rub(low)} и средняя {rub(avg)} слишком близко после 5%"
-    else:
-        liq = "СКУПАТЬ"
-        note = f"низ {rub(low)} против средней {rub(avg)}, профит {rub(net)}"
-    return {"liq": liq, "low": low, "avg": avg, "per_h": per_h, "n": len(clean), "net": net, "note": note}
-
-
-def kit_signal(sales):
-    prices = [p for _, p in sales]
-    if len(prices) < 20:
-        return {"name": "Боевой набор", "err": "мало сделок"}
-    span = max((sales[-1][0] - sales[0][0]).total_seconds() / 3600, 0.5)
-    chk = buy_check(prices, hours=span)
-    last = sales[-1][1]
-    snipes = [p for p in prices if 120000 <= p <= 145000]
-    if chk["liq"] == "СКУПАТЬ" and last <= chk["low"] * 1.02:
-        act = "СКУПАТЬ"
-        why = chk["note"]
-    else:
-        act = "НЕ СКУПАТЬ"
-        why = chk["note"]
-        if snipes:
-            why += f". разовых дешёвых лотов {len(snipes)}, это не полка для скупа"
-    return {
-        "name": "Боевой набор", "act": act, "why": why, "last": last,
-        "med": chk["avg"], "low": chk["low"], "avg": chk["avg"],
-        "per_h": chk["per_h"], "liq": chk["liq"], "extra": f"снайпов 120–145к: {len(snipes)}",
-    }
-
-
-def med_signal(name, sales, now):
-    if not sales:
-        return {"name": name, "err": "нет сделок"}
-    morning = [p for t, p in sales if 7 <= t.hour < 11]
-    evening = [p for t, p in sales if 16 <= t.hour < 21]
-    span = max((sales[-1][0] - sales[0][0]).total_seconds() / 3600, 0.5)
-    sell = _clip(morning) if len(morning) >= 20 else []
-    buy = _clip(evening) if len(evening) >= 20 else []
-    if len(sell) < 20 or len(buy) < 20:
-        chk = buy_check([p for _, p in sales], hours=span)
-        return {
-            "name": name, "act": "НЕ СКУПАТЬ",
-            "why": f"мало окна: утро {len(morning)}, вечер {len(evening)}",
-            "last": sales[-1][1], "med": chk["avg"], "low": chk["low"], "avg": chk["avg"],
-            "per_h": chk["per_h"], "liq": "НЕ СКУПАТЬ", "extra": "",
-        }
-    low = sorted(buy)[max(0, int(len(buy) * 0.1) - 1)]
-    avg = statistics.mean(sell)
-    per_h = len(sales) / span
-    net = avg * COMM - low
-    margin = net / low if low else 0
-    extra = f"низ вечера {rub(low)} / средняя утра {rub(avg)} / {per_h:.0f} продаж/час"
-    liquid = per_h >= 4 and margin >= 0.08
-    if not liquid:
-        act = "НЕ СКУПАТЬ"
-        why = f"{per_h:.0f} продаж/час, сливать некуда" if per_h < 4 else "низ и средняя продажа слишком близко после 5%"
-    elif 16 <= now.hour < 23:
-        act = "СКУПАТЬ"
-        why = f"окно закупа. профит к утру ~{rub(net)}"
-    elif 7 <= now.hour < 12:
-        act = "НЕ СКУПАТЬ"
-        why = f"сейчас утро, это цена слива, не закупа. профит был бы ~{rub(net)}"
-    else:
-        act = "НЕ СКУПАТЬ"
-        why = f"зазор есть, закуп с 16 до 21. профит ~{rub(net)}"
-    return {
-        "name": name, "act": act, "why": why, "last": sales[-1][1], "med": avg,
-        "low": low, "avg": avg, "per_h": per_h,
-        "liq": "СКУПАТЬ" if act == "СКУПАТЬ" else "НЕ СКУПАТЬ", "extra": extra,
-    }
-
-
-def session_deals():
-    now = datetime.now(MSK)
-
-    def both_windows(times):
-        morning = sum(1 for t in times if 7 <= t.hour < 11)
-        evening = sum(1 for t in times if 16 <= t.hour < 21)
-        return morning >= 40 and evening >= 40
-
-    def kit():
-        return kit_signal(hist_timed("z3o52", 4))
-
-    def med(item):
-        slug, name = item
-        return med_signal(name, hist_timed(slug, 30, both_windows), now)
-
-    kit_row, epi, morph = parallel([("kit",), ("vjy3n", "Эпинефрин"), ("p62q6", "Морфин")], lambda item: kit() if item == ("kit",) else med(item))
-    rows = []
-    for row, fallback in ((kit_row, "Боевой набор"), (epi, "Эпинефрин"), (morph, "Морфин")):
-        if isinstance(row, Exception):
-            rows.append({"name": fallback, "err": str(row)})
-        elif row:
-            rows.append(row)
-    return rows
-
-
-def _farm_one(item):
-    slug, name, kind = item
-    h = hist(slug)
-    if not h:
-        return {"name": name, "err": "нет сделок"}
-    act, why = farm_action(kind, h["last"], h["med"])
-    extra = ""
-    if kind == "пыль":
-        extra = f" | 3000={rub(3000 * h['last'])} на руки={rub(3000 * h['last'] * COMM)}"
-    return {**h, "name": name, "act": act, "why": why + extra, "kind": kind}
-
-
-def _flip_one(item):
-    slug, name = item
-    h = hist(slug)
-    if not h:
-        return {"name": name, "err": "нет сделок"}
-    chk = buy_check(h["prices"], min_n=25)
-    return {
-        **h, "name": name, "act": chk["liq"], "why": chk["note"],
-        "low": chk["low"], "avg": chk["avg"], "per_h": chk["per_h"], "liq": chk["liq"],
-    }
-
-
-def collect(status=None):
-    def say(msg):
-        log(msg)
-        if status:
-            status(msg)
-
-    say(f"Фарм, сразу {min(WORKERS, len(FARM))} предметов")
-    farm = []
-    for row in parallel(FARM, _farm_one):
-        if isinstance(row, Exception):
-            farm.append({"name": "фарм", "err": str(row)})
-        elif row:
-            farm.append(row)
-    say(f"Перекуп, сразу {min(WORKERS, len(FLIP))} предметов")
-    flip = []
-    for row in parallel(FLIP, _flip_one):
-        if isinstance(row, Exception):
-            flip.append({"name": "перекуп", "err": str(row)})
-        elif row:
-            flip.append(row)
-    say("Арты")
-    arts, checked = art_deals()
-    say("Наборы и расходники")
-    session = session_deals()
-    return farm, flip, arts, checked, session
-
-
-def write_files(farm, flip, arts, checked, session):
-    now = datetime.now().strftime("%d.%m.%Y %H:%M")
-
-    def row(r, cls_fn):
-        if r.get("err"):
-            return f"<tr><td>{r['name']}</td><td colspan='3'>{r['err']}</td></tr>"
-        cls = cls_fn(r["act"])
-        return (
-            f"<tr class='{cls}'><td>{r['name']}</td><td>{rub(r['last'])}</td><td>{rub(r['med'])}</td>"
-            f"<td><b>{r['act']}</b><br><small>{r['why']}</small></td></tr>"
-        )
-
-    def art_row(r):
-        if r.get("err"):
-            return f"<tr><td>{r['name']}</td><td colspan='7'>{r['err']}</td></tr>"
-        cls = "buy" if r.get("liq") == "СКУПАТЬ" else "skip"
-        return (
-            f"<tr class='{cls}'><td>{r['name']}</td><td>{r['qlt']}</td><td>{r['n']}</td>"
-            f"<td>{rub(r['cheap'])}</td><td>{rub(r['med'])}</td><td>{rub(r['net'])}</td>"
-            f"<td><b>{r.get('liq', '')}</b></td></tr>"
-        )
-
-    def sess_cls(act):
-        if act == "СКУПАТЬ":
-            return "buy"
-        if act in ("НЕ СКУПАТЬ", "НЕ ТРОГАТЬ", "МАЛО ДАННЫХ"):
-            return "skip"
-        return "hold"
-
-    def sess_row(r):
-        if r.get("err"):
-            return f"<tr><td>{r['name']}</td><td colspan='5'>{r['err']}</td></tr>"
-        extra = (" · " + r["extra"]) if r.get("extra") else ""
-        return (
-            f"<tr class='{sess_cls(r['act'])}'><td>{r['name']}</td>"
-            f"<td>{rub(r.get('low', 0))}</td><td>{rub(r.get('avg', r.get('med', 0)))}</td>"
-            f"<td>{r.get('per_h', 0):.0f}</td><td><b>{r['act']}</b><br><small>{r['why']}{extra}</small></td></tr>"
-        )
-
-    def flip_row(r):
-        if r.get("err"):
-            return f"<tr><td>{r['name']}</td><td colspan='3'>{r['err']}</td></tr>"
-        cls = "buy" if r.get("act") == "СКУПАТЬ" else "skip"
-        return (
-            f"<tr class='{cls}'><td>{r['name']}</td><td>{rub(r.get('low', 0))}</td>"
-            f"<td>{rub(r.get('avg', 0))}</td><td><b>{r['act']}</b><br><small>{r['why']}</small></td></tr>"
-        )
-
-    arts_body = "".join(art_row(r) for r in arts) or (
-        "<tr><td colspan='7'>Спреда нет: дешёвые сделки не отбивают 12% после комиссии.</td></tr>"
-    )
-    html = f"""<!doctype html><meta charset="utf-8">
-<title>STALZONE агент {now}</title>
-<style>
-body{{font:15px/1.4 sans-serif;background:#111;color:#eee;margin:24px}}
-table{{border-collapse:collapse;width:100%;max-width:980px;margin:8px 0 28px}}
-td,th{{border-bottom:1px solid #333;padding:8px 10px;text-align:left;vertical-align:top}}
-.sell{{background:#163216}} .hold{{background:#3a2a12}}
-.buy{{background:#12243a}} .skip{{background:#1a1a1a}}
-small{{color:#aaa}}
-</style>
-<h1>STALZONE агент</h1>
-<p>Обновлено {now}. Цены EXBO. Комиссия 5%. Перед слотом сверь лот в игре.</p>
-<h2>Слив фарма</h2>
-<table><tr><th>Предмет</th><th>Last</th><th>Мед 30</th><th>Действие</th></tr>
-{''.join(row(r, lambda a: 'hold' if a.startswith('ДЕРЖ') else 'sell') for r in farm)}
-</table>
-<h2>Перекуп кэша</h2>
-<table><tr><th>Предмет</th><th>Низ</th><th>Средняя</th><th>Скуп</th></tr>
-{''.join(flip_row(r) for r in flip)}
-</table>
-<h2>Наборы и расходники</h2>
-<table><tr><th>Предмет</th><th>Низ</th><th>Средняя продажа</th><th>Продаж/час</th><th>Скуп</th></tr>
-{''.join(sess_row(r) for r in session)}
-</table>
-<h2>Арты</h2>
-<p>Проверено {checked}.</p>
-<table><tr><th>Арт</th><th>Качество</th><th>Сделок</th><th>Низ</th><th>Средняя</th><th>Профит</th><th>Скуп</th></tr>
-{arts_body}
-</table>
-"""
-    HTML.write_text(html, encoding="utf-8")
-    lines = [f"STALZONE агент  {now}", "комиссия 5%", "", "=== СЛИВ ФАРМА ==="]
-    for r in farm:
-        lines.append(f"{r['name']}: {r['err']}" if r.get("err") else f"{r['name']}: last {rub(r['last'])} / мед {rub(r['med'])} → {r['act']} ({r['why']})")
-    lines += ["", "=== ПЕРЕКУП ==="]
-    for r in flip:
-        lines.append(f"{r['name']}: {r['err']}" if r.get("err") else f"{r['name']}: низ {rub(r.get('low', 0))} / средняя {rub(r.get('avg', 0))} → {r['act']} ({r['why']})")
-    lines += ["", "=== НАБОРЫ ==="]
-    for r in session:
-        lines.append(f"{r['name']}: {r['err']}" if r.get("err") else f"{r['name']}: низ {rub(r.get('low', 0))} / средняя {rub(r.get('avg', 0))} / {r.get('per_h', 0):.0f} в час → {r['act']}")
-    lines += ["", f"=== АРТЫ ({checked}) ==="]
-    if not arts:
-        lines.append("спреда нет")
-    for r in arts:
-        lines.append(f"{r['name']}: {r['err']}" if r.get("err") else f"{r['name']} [{r['qlt']}] x{r['n']}: низ {rub(r['cheap'])} / средняя {rub(r['med'])} / профит {rub(r['net'])} / {r.get('liq')}")
-    TXT.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 _PACE = threading.Lock()
@@ -1151,17 +437,6 @@ def get_json(url):
             raise failure
 
 
-def market_unit(slug):
-    data = history_json(slug)
-    units = []
-    for p in data.get("prices") or []:
-        amt = max(p.get("amount") or 1, 1)
-        units.append(p["price"] / amt)
-    if len(units) < 8:
-        return None
-    return statistics.median(_clip(units))
-
-
 _LIVE = {}
 _LIVE_LOCK = threading.Lock()
 _BOOK = {}
@@ -1199,76 +474,6 @@ def live_lots(slug, pages=4):
         if offset >= pages * 200 or offset >= total:
             break
     return out
-
-
-def _sniper_item(item):
-    slug, name = item
-    med = market_unit(slug)
-    grouped = {}
-    if not med:
-        return []
-    ceiling = med * BUY_AT
-    for lot in cached_live(slug):
-        buy = int(lot.get("buyoutPrice") or 0)
-        amt = int(lot.get("amount") or 0)
-        if buy <= 0 or amt <= 0 or buy > BUDGET:
-            continue
-        unit = buy / amt
-        if unit > ceiling:
-            continue
-        net_u = med * COMM - unit
-        if net_u <= 0:
-            continue
-        key = (slug, amt, buy)
-        row = grouped.get(key)
-        if row is None:
-            grouped[key] = {
-                "name": name, "slug": slug, "amount": amt, "buyout": buy,
-                "unit": unit, "med": med, "net_u": net_u, "profit": net_u * amt,
-                "roi": net_u / unit, "count": 1,
-            }
-        else:
-            row["count"] += 1
-    return list(grouped.values())
-
-
-def sniper(budget=BUDGET, status=None):
-    items = list(ARSENAL) + list(CONSUMABLES)
-    if status:
-        status(f"Выкуп, сразу {min(WORKERS, len(items))} предметов")
-    grouped = {}
-    done = 0
-    for part in parallel(items, _sniper_item):
-        done += 1
-        if status and done % 4 == 0:
-            status(f"Выкуп готово {done}/{len(items)}")
-        if isinstance(part, Exception):
-            log(str(part))
-            continue
-        for row in part or []:
-            key = (row["slug"], row["amount"], row["buyout"])
-            have = grouped.get(key)
-            if have is None:
-                grouped[key] = row
-            else:
-                have["count"] += row["count"]
-    rows = sorted(grouped.values(), key=lambda r: r["roi"], reverse=True)
-    chosen, left = [], budget
-    for r in rows:
-        if r["buyout"] > left:
-            continue
-        copies = min(r["count"], left // r["buyout"])
-        if copies <= 0:
-            continue
-        item = dict(r)
-        item["copies"] = copies
-        item["spend"] = copies * r["buyout"]
-        item["gain"] = copies * r["profit"]
-        chosen.append(item)
-        left -= item["spend"]
-        if len(chosen) >= 12:
-            break
-    return chosen
 
 
 def catalog():
@@ -1600,7 +805,7 @@ def _left(value):
     return f"{hours}ч {minutes}м" if hours else f"{minutes}м"
 
 
-def item_view(slug):
+def item_view(slug, name=""):
     """Живые лоты и последние продажи одного предмета с EXBO."""
     lots_raw = []
     offset = 0
@@ -1652,14 +857,15 @@ def item_view(slug):
             "price": price,
             "unit": price / amt,
         })
-    return {"lots": lots, "sales": sales, "total": total or len(lots_raw)}
+    verdict = flip_reason(slug, name or slug, lots_raw, _sales_book(hist.get("prices") or []), allow_single=True)
+    return {"lots": lots, "sales": sales, "total": total or len(lots_raw), "verdict": verdict}
 
 
 def write_buys(rows):
     now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    body, lines = [], [f"Выкуп  {now}", "лот дешевле обычной цены. Ставь её: после 5% должен остаться плюс. Выше в списке больший плюс.", ""]
+    body, lines = [], [f"Выкуп  {now}", "Медиана за 7 дней, после 5% плюс от 10 тысяч. Выше в списке больший плюс.", ""]
     if not rows:
-        body.append("<tr><td colspan='8'>Сейчас нет лота, который после 5% даст хотя бы 6% и который ещё покупают.</td></tr>")
+        body.append("<tr><td colspan='8'>Сейчас нет лота, который после 5% даст хотя бы 10 тысяч и который ещё купят.</td></tr>")
         lines.append("выкупать нечего")
     for r in rows:
         body.append(
@@ -1960,11 +1166,98 @@ def _fair_exit(samples, now, need):
     return statistics.median(kept), per_h
 
 
-def find_flips(book, slug, name, allow_single=False):
-    """Лот выгоден, только если его реально покупают прямо сейчас и после комиссии есть запас."""
+def _label_for(name, key):
+    qlt_i = None
+    qlt_name = ""
+    ptn_s = ""
+    if isinstance(key, tuple) and key and key[0] != "mod":
+        qlt_i = int(key[0])
+        qlt_name = QLT[qlt_i] if 0 <= qlt_i < len(QLT) else str(qlt_i)
+        ptn_s = f"+{int(key[1])}"
+        label = name
+    elif isinstance(key, tuple) and key and key[0] == "mod":
+        label = f"{name} {module_name(key)}"
+    else:
+        label = name
+    return label, qlt_name, ptn_s, qlt_i
+
+
+def _hand_bit(profit):
+    n = int(profit)
+    if n >= 0:
+        return f"после 5% плюс {n}"
+    return f"после 5% минус {-n}"
+
+
+def _price_bit(exit_hist, nxt, sell_at):
+    if nxt is not None and nxt < exit_hist:
+        return f"медиана {exit_hist:.0f}, соседний лот {nxt:.0f}"
+    return f"медиана {sell_at:.0f}"
+
+
+def _judge_group(slug, name, key, amt, rows, hist, now):
+    rows = sorted(rows)
+    unit, buy = rows[0]
+    j = 1
+    while j < len(rows) and rows[j][1] == buy:
+        j += 1
+    copies = j
+    nxt = rows[j][0] if j < len(rows) else None
+    label, qlt_name, ptn_s, qlt_i = _label_for(name, key)
+    quote = tracker_quote(hist, now)
+    row = {
+        "name": label, "slug": slug, "amount": amt, "buyout": buy,
+        "unit": unit, "count": copies, "required_copies": copies,
+        "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
+        "ok": False, "profit": None,
+        "why": f"лот {int(buy)}, у этой пачки меньше трёх продаж, медианы нет",
+    }
+    if not quote:
+        return row
+    exit_hist = quote["ask"]
+    sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
+    profit = _net_profit(sell_at * amt, buy)
+    per_h = quote["per_h"]
+    price_bit = _price_bit(exit_hist, nxt, sell_at)
+    hand = _hand_bit(profit)
+    row.update({
+        "med": sell_at, "net_u": profit / amt if amt else 0, "profit": profit,
+        "roi": profit / buy if buy else 0, "per_h": per_h,
+        "per_day": quote["per_day"], "hours": quote.get("hours"),
+        "horizon": quote.get("advisor") or quote["code"],
+        "horizon_title": quote.get("advisor_title") or quote["title"],
+        "share": quote["share"], "stale_min": quote.get("stale_min"),
+        "n": quote["n"],
+    })
+    if profit < TRACKER_MIN:
+        row["why"] = f"лот {int(buy)}, {price_bit}, {hand}. Мало: нужно хотя бы {TRACKER_MIN}."
+        return row
+    if copies > max(1, int(per_h * 1.5)):
+        row["why"] = (
+            f"лот {int(buy)}, {price_bit}, {hand}. "
+            f"Таких лотов {copies}, за час уходит {per_h:.1f}, пачку не сольёшь."
+        )
+        return row
+    row["ok"] = True
+    row["why"] = f"Брать: лот {int(buy)}, {price_bit}, {hand}."
+    return row
+
+
+def _sales_book(prices):
+    sales = {}
+    for p in prices or []:
+        amt = max(int(p.get("amount") or 1), 1)
+        price = p.get("price")
+        if not price:
+            continue
+        sales.setdefault(side_key(p.get("additional")), []).append((amt, price / amt, _epoch(p.get("time"))))
+    return sales
+
+
+def _groups(slug, name, allow_single, lots, sales):
     now = time.time()
     offers = {}
-    for lot in cached_live(slug):
+    for lot in lots or []:
         buy = int(lot.get("buyoutPrice") or 0)
         amt = int(lot.get("amount") or 0)
         add = lot.get("additional") or {}
@@ -1974,57 +1267,52 @@ def find_flips(book, slug, name, allow_single=False):
         if amt <= 1 and not (allow_single or key is not None):
             continue
         offers.setdefault((key, amt), []).append((buy / amt, buy))
-    deals = []
+    judged = []
     for (key, amt), rows in offers.items():
         hist = []
-        for row in book["sales"].get(key) or []:
+        for row in (sales or {}).get(key) or []:
             if row[0] != amt:
                 continue
             ts = row[2] if len(row) > 2 else now
             hist.append((row[1], ts))
-        quote = tracker_quote(hist, now)
-        if not quote:
+        judged.append(_judge_group(slug, name, key, amt, rows, hist, now))
+    return judged
+
+
+def find_flips(book, slug, name, allow_single=False, limit=3):
+    """Лот выгоден, только если его реально покупают прямо сейчас и после комиссии есть запас."""
+    judged = _groups(slug, name, allow_single, cached_live(slug), book.get("sales"))
+    deals = []
+    for row in judged:
+        if not row["ok"]:
             continue
-        exit_hist = quote["ask"]
-        per_h = quote["per_h"]
-        rows.sort()
-        # Only clearing the cheapest tier can expose the next asking price.
-        unit, buy = rows[0]
-        j = 1
-        while j < len(rows) and rows[j][1] == buy:
-            j += 1
-        nxt = rows[j][0] if j < len(rows) else None
-        sell_at = exit_hist if nxt is None else min(exit_hist, nxt)
-        profit = _net_profit(sell_at * amt, buy)
-        if profit < TRACKER_MIN:
-            continue
-        copies = j
-        if copies > max(1, int(per_h * 1.5)):
-            continue
-        qlt_i = None
-        qlt_name = ""
-        ptn_s = ""
-        if isinstance(key, tuple) and key and key[0] != "mod":
-            qlt_i = int(key[0])
-            qlt_name = QLT[qlt_i] if 0 <= qlt_i < len(QLT) else str(qlt_i)
-            ptn_s = f"+{int(key[1])}"
-            label = name
-        elif isinstance(key, tuple) and key and key[0] == "mod":
-            label = f"{name} {module_name(key)}"
-        else:
-            label = name
-        deals.append({
-            "name": label, "slug": slug, "amount": amt, "buyout": buy,
-            "unit": unit, "med": sell_at, "net_u": profit / amt, "profit": profit,
-            "roi": profit / buy, "count": copies, "required_copies": copies, "per_h": per_h,
-            "qlt": qlt_name, "ptn": ptn_s, "qlt_i": qlt_i,
-            "per_day": quote["per_day"], "hours": quote.get("hours"),
-            "horizon": quote.get("advisor") or quote["code"],
-            "horizon_title": quote.get("advisor_title") or quote["title"],
-            "share": quote["share"], "stale_min": quote.get("stale_min"),
-        })
+        deal = dict(row)
+        deal.pop("ok", None)
+        deal.pop("why", None)
+        deals.append(deal)
     deals.sort(key=lambda r: (r["profit"] * r["count"], r["profit"] * r["per_h"]), reverse=True)
-    return deals[:3]
+    return deals[:limit]
+
+
+def flip_reason(slug, name, lots, sales, allow_single=True):
+    """Одна строка: почему лот брать или что именно его остановило."""
+    judged = _groups(slug, name, allow_single, lots, sales)
+    if not judged:
+        priced = [
+            lot for lot in lots or []
+            if int(lot.get("buyoutPrice") or 0) > 0 and int(lot.get("amount") or 0) > 0
+        ]
+        if not priced:
+            return "С выкупом ничего нет."
+        return "Одиночный лот без редкости не считаю. Нужна пачка или отмеченный предмет."
+    good = [row for row in judged if row["ok"]]
+    if good:
+        best = max(good, key=lambda r: (r["profit"] * r["count"], r["profit"]))
+        return best["why"]
+    known = [row for row in judged if row.get("profit") is not None]
+    pool = known or judged
+    best = max(pool, key=lambda r: (r["profit"] if r.get("profit") is not None else -10 ** 18, -r["buyout"]))
+    return best["why"]
 
 
 def sell_call(last, sold, live):
@@ -2079,22 +1367,12 @@ def item_advice(item):
         return {"name": name, "err": "мало сделок"}
     last, sold, n = got
     act, ask, why_sell = sell_call(last, sold, book["live"].get(key))
-    deals = []
-    best = book["live"].get(key)
     try:
         deals = find_flips(book, slug, name, allow_single=False)
     except Exception as e:
         return {"name": name, "last": last, "med": sold, "farm": act, "buy": "НЕ ВЫКУПАТЬ", "why": str(e), "deals": []}
-    if deals:
-        top = deals[0]
-        buy_act = "ВЫКУПИТЬ"
-        why = f"{top['amount']} шт за {int(top['buyout'])}, продашь около {top['med']:.0f}, покупок {top['per_h']:.1f} в час"
-    elif best:
-        buy_act = "НЕ ВЫКУПАТЬ"
-        why = f"дешевле всех {best:.0f}, свежих покупок пачками мало или запаса после комиссии нет"
-    else:
-        buy_act = "НЕ ВЫКУПАТЬ"
-        why = "выкупа пачкой нет"
+    why = flip_reason(slug, name, cached_live(slug), sales, allow_single=False)
+    buy_act = "ВЫКУПИТЬ" if deals else "НЕ ВЫКУПАТЬ"
     return {"name": name, "last": last, "med": sold, "ask": ask, "farm": act, "buy": buy_act, "why": why, "why_sell": why_sell, "deals": deals, "n": n}
 
 
@@ -2155,11 +1433,13 @@ ERROR_NAMES = {
 }
 
 
-def buy_targets():
-    """Весь продаваемый каталог. У арта каждая редкость и каждая точка считаются отдельно."""
+def buy_targets(favs=None):
+    """Весь продаваемый каталог. Избранное не режется категорией. Арты идут первыми."""
+    favs = {str(slug) for slug in (favs or ()) if slug}
     single_cats = {
         "artefact", "weapon", "armor", "attachment",
         "containers", "container", "backpacks", "backpack", "grenade", "device",
+        "weapon_modules",
     }
     try:
         catalog = auction_listing()
@@ -2167,21 +1447,39 @@ def buy_targets():
         log(f"каталог аукциона: {e}")
         catalog = []
     if catalog:
-        arts, rest = [], []
+        arts, pinned, rest = [], [], []
         off = _off_auction()
         quiet = quiet_lots()
         for item in catalog:
-            if item["cat"] == "weapon_modules" or item["name"] in ERROR_NAMES or item["id"] in off or item["id"] in quiet or _skip_buy(item["cat"], item["name"], item.get("color")):
+            starred = item["id"] in favs
+            if item["id"] in off:
                 continue
-            row = (item["id"], item["name"], item["cat"] in single_cats, 1, 1)
+            blocked = (
+                item["cat"] == "weapon_modules"
+                or item["name"] in ERROR_NAMES
+                or item["id"] in quiet
+                or _skip_buy(item["cat"], item["name"], item.get("color"))
+            )
+            if blocked and not starred:
+                continue
+            single = starred or item["cat"] in single_cats
+            row = (item["id"], item["name"], single, 1, 1)
             if item["cat"] == "artefact":
                 arts.append(row)
+            elif starred:
+                pinned.append(row)
             else:
                 rest.append(row)
-        if PROTO[0] not in {row[0] for row in arts} and PROTO[1] not in ERROR_NAMES:
+        if PROTO[0] not in {row[0] for row in arts} and (PROTO[0] in favs or PROTO[1] not in ERROR_NAMES):
             arts.insert(0, (PROTO[0], PROTO[1], True, 1, 1))
-        return arts + rest
+        seen = {row[0] for row in arts + pinned + rest}
+        for slug in favs:
+            if slug not in seen and slug not in off:
+                pinned.append((slug, slug, True, 1, 1))
+        return arts + pinned + rest
     seen = {}
+    for slug in favs:
+        seen[slug] = (slug, slug, True, 1, 1)
     for slug, name in ARTS:
         seen[slug] = (slug, name, True, 1, 1)
     for slug, name in list(SHELTER_BUY) + list(CONSUMABLES):
@@ -2277,12 +1575,12 @@ def fit_budget(deals, budget):
     return chosen
 
 
-def buy_scan(status=None, budget=0, on_update=None):
+def buy_scan(status=None, budget=0, on_update=None, favs=None):
     global _GAP
     _GAP = 0.10
     if status:
         status("Собираю каталог аукциона")
-    items = buy_targets()
+    items = buy_targets(favs)
     total = len(items)
     if status:
         status(f"Выкуп по всему аукциону: {total} предметов. Таблица будет заполняться по ходу")
@@ -2395,62 +1693,22 @@ def _pack(rows):
 def proto_deals():
     slug, name = PROTO
     try:
-        sales = sale_points(art_history(slug))
-        lots = cached_live(slug)
+        deals = find_flips(market_book(slug, 4), slug, name, allow_single=True, limit=30)
     except Exception as e:
         return [{"name": name, "err": str(e)}]
-    by = {}
-    for price, qlt, ptn in sales:
-        by.setdefault((qlt, ptn), []).append(price)
-    best = {}
-    for lot in lots:
-        add = lot.get("additional") or {}
-        qlt = add.get("qlt")
-        ptn = add.get("ptn")
-        if qlt is None:
-            qlt = 0
-        if ptn is None:
-            ptn = 0
-        qlt, ptn = int(qlt), int(ptn)
-        buy = int(lot.get("buyoutPrice") or 0)
-        amt = int(lot.get("amount") or 0)
-        if buy <= 0 or amt <= 0:
-            continue
-        unit = buy / amt
-        key = (qlt, ptn)
-        if key not in best or unit < best[key]:
-            best[key] = unit
     rows = []
-    for (qlt, ptn), vals in sorted(by.items()):
-        qname = qlabel(qlt, ptn)
-        if len(vals) < ART_MIN_SALES:
-            rows.append({"name": name, "qlt": qname, "n": len(vals), "buy": "МАЛО ДАННЫХ", "farm": "ДЕРЖАТЬ", "cheap": 0, "med": 0, "net": 0})
-            continue
-        last = vals[0]
-        ordered = sorted(vals)
-        med = statistics.median(ordered)
-        low = ordered[max(0, int(len(ordered) * 0.10) - 1)]
-        net = med * COMM - low
-        unit = best.get((qlt, ptn))
-        if unit and unit <= med * BUY_AT and med * COMM - unit > 0:
-            buy = "ВЫКУПИТЬ"
-            cheap = unit
-            net = med * COMM - unit
-        elif net > 0 and low <= med * BUY_AT:
-            buy = "ВЫКУПАТЬ НИЖЕ"
-            cheap = low
-        else:
-            buy = "НЕ ВЫКУПАТЬ"
-            cheap = unit or low
-            net = (med * COMM - cheap) if cheap else 0
-        farm = "ДЕРЖАТЬ" if med and last < med * 0.9 else "СЛИТЬ"
-        rows.append({"name": name, "qlt": qname, "n": len(vals), "buy": buy, "farm": farm, "cheap": cheap, "med": med, "net": net})
+    for deal in deals:
+        q = " ".join(part for part in (deal.get("qlt"), deal.get("ptn")) if part)
+        rows.append({
+            "name": deal["name"], "qlt": q or name, "n": deal.get("n") or 0,
+            "buy": "ВЫКУПИТЬ", "farm": "СЛИТЬ",
+            "cheap": deal["unit"], "med": deal["med"], "net": deal["profit"],
+        })
     rows.sort(key=lambda r: r.get("net") or 0, reverse=True)
     return rows
 
 
-def run_once(status=None, only=None, budget=0, on_update=None):
-    _HIST.clear()
+def run_once(status=None, only=None, budget=0, on_update=None, favs=None):
     _LIVE.clear()
     _BOOK.clear()
     log("прогон старт" if not only else f"прогон: {only}")
@@ -2463,7 +1721,7 @@ def run_once(status=None, only=None, budget=0, on_update=None):
     want = only or None
     out = {}
     if want == "buys":
-        deals = buy_scan(say, budget, on_update)
+        deals = buy_scan(say, budget, on_update, favs)
         out["buys"] = deals
         if deals:
             spent = sum(r["spend"] for r in deals)
@@ -2542,7 +1800,7 @@ def main():
     args = p.parse_args()
     if args.buys:
         log("считаю выгодный выкуп")
-        write_buys(sniper())
+        write_buys(buy_scan(budget=BUDGET))
         return
     run_once()
     if args.once:

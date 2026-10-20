@@ -22,6 +22,15 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.bridge.poll()['compact'][0]['name'], 'Соленоид')
         self.bridge._show({'buys':[]})
         self.assertEqual(self.bridge.poll()['compact'], [])
+
+    def test_compact_keeps_the_hour_figure(self):
+        self.bridge._show({'buys':[
+            {'name':'Медленный','slug':'a','copies':1,'amount':1,'buyout':1,'med':2,'gain':50000,'hour_gain':100},
+            {'name':'Быстрый','slug':'b','copies':1,'amount':1,'buyout':1,'med':2,'gain':20000,'hour_gain':9000},
+        ]})
+        rows = self.bridge.poll()['compact']
+        self.assertEqual(rows[1]['name'], 'Быстрый')
+        self.assertEqual(rows[1]['hour_n'], 9000)
     def test_hud_actions_queue_on_controller(self):
         class Controller:
             def command(self, action): return {'ok':action == 'full'}
