@@ -25,6 +25,7 @@ def app_dir():
 DIR = app_dir()
 EXBO = "https://eapi.stalzone.com"
 DB_ZIP = "https://codeload.github.com/EXBO-Studio/stalzone-database/zip/refs/heads/main"
+DB_LISTING = "https://raw.githubusercontent.com/EXBO-Studio/stalzone-database/main/ru/listing.json"
 LOG = DIR / "stalzone_agent.log"
 BUY_HTML = DIR / "buy_now.html"
 COMM = 0.95
@@ -574,13 +575,71 @@ def _load_catalog(force=False):
             log("База EXBO не скачалась, беру прошлый каталог")
             return json.loads(path.read_text(encoding="utf-8"))
         raise
+    if not items:
+        if path.exists():
+            path.touch()
+            return json.loads(path.read_text(encoding="utf-8"))
+        raise RuntimeError("База предметов пустая")
     path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
     return items
 
 
 def _catalog_from_exbo():
-    """Официальная база предметов EXBO. Один архив, дальше три дня из файла."""
-    log("Качаю базу предметов EXBO, около 150 МБ, один раз на три дня")
+    """Список предметов из ru/listing.json. Полный архив только если список не открылся."""
+    log("Качаю список предметов EXBO")
+    try:
+        items = _catalog_from_listing()
+    except Exception as exc:
+        log(f"Список предметов не открылся ({exc}). Качаю архив базы")
+        return _catalog_from_zip()
+    if items is None:
+        return None
+    if items:
+        return items
+    log("Список предметов пустой, качаю архив базы")
+    return _catalog_from_zip()
+
+
+def _catalog_from_listing():
+    path = DIR / "catalog.json"
+    stamp = DIR / "catalog.etag"
+    headers = {"User-Agent": UA, "Accept": "application/json"}
+    if path.exists() and stamp.exists():
+        etag = stamp.read_text(encoding="utf-8").strip()
+        if etag:
+            headers["If-None-Match"] = etag
+    with httpx.Client(timeout=60, follow_redirects=True) as client:
+        res = client.get(DB_LISTING, headers=headers)
+    if res.status_code == 304:
+        log("База предметов не менялась, архив заново не качаю")
+        return None
+    res.raise_for_status()
+    items = _items_in_listing(res.json())
+    etag = (res.headers.get("etag") or "").strip()
+    if etag and items:
+        stamp.write_text(etag, encoding="utf-8")
+    return items
+
+
+def _items_in_listing(rows):
+    found = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        data_path = str(row.get("data") or "")
+        parts = [part for part in data_path.split("/") if part]
+        if "items" not in parts:
+            continue
+        stem = Path(data_path).stem
+        item = _item_row(stem, parts[parts.index("items") + 1], row)
+        if item:
+            found[item["id"]] = item
+    return _sorted_items(found)
+
+
+def _catalog_from_zip():
+    """Запасной путь: весь архив базы, если короткий список недоступен."""
+    log("Качаю архив базы EXBO, около 190 МБ")
     tmp = DIR / "stalzone-database.zip"
     try:
         with httpx.Client(timeout=180, follow_redirects=True) as client:
@@ -600,25 +659,34 @@ def _items_in_zip(path):
         for name in zf.namelist():
             if "/ru/items/" not in name or not name.endswith(".json"):
                 continue
+            if "/_variants/" in name:
+                continue
             stem = Path(name).stem
             if stem.isdigit():
                 continue
             data = json.loads(zf.read(name))
-            item_id = data.get("id") or stem
-            if data.get("color") == "QUEST_ITEM":
-                continue
             parts = name.split("/")
             try:
                 cat = parts[parts.index("items") + 1]
             except ValueError:
                 continue
-            title = ((data.get("name") or {}).get("lines") or {}).get("ru") or item_id
-            found[item_id] = {
-                "id": item_id,
-                "name": title,
-                "cat": cat,
-                "color": data.get("color") or "DEFAULT",
-            }
+            item = _item_row(data.get("id") or stem, cat, data)
+            if item:
+                found[item["id"]] = item
+    return _sorted_items(found)
+
+
+def _item_row(item_id, cat, data):
+    item_id = str(item_id or "")
+    if not item_id or item_id.isdigit():
+        return None
+    if data.get("color") == "QUEST_ITEM":
+        return None
+    title = ((data.get("name") or {}).get("lines") or {}).get("ru") or item_id
+    return {"id": item_id, "name": title, "cat": cat, "color": data.get("color") or "DEFAULT"}
+
+
+def _sorted_items(found):
     items = list(found.values())
     items.sort(key=lambda item: item["name"].lower())
     log(f"В базе EXBO {len(items)} предметов")

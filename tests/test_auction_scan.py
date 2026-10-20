@@ -2,6 +2,8 @@ import tempfile
 import threading
 import time
 import math
+import os
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +19,40 @@ class ScanTests(unittest.TestCase):
     def tearDown(self):
         a.HALT.clear(); a._LIVE.clear(); a._BOOK.clear()
         self.dir_patch.stop(); self.temp.cleanup()
+    def test_listing_keeps_the_same_items_as_the_archive(self):
+        rows = [
+            {"data": "/items/supply/medicine/9mmq.json", "name": {"lines": {"ru": "Аптечка"}}, "color": "RANK_VETERAN"},
+            {"data": "/items/other/quest.json", "name": {"lines": {"ru": "Квест"}}, "color": "QUEST_ITEM"},
+            {"data": "/items/armor/scientist/_variants/p69k2/10.json", "name": {"lines": {"ru": "Вариант"}}, "color": "RANK_MASTER"},
+            {"data": "/items/misc/nope.json"},
+        ]
+        items = a._items_in_listing(rows)
+        self.assertEqual(
+            items,
+            [
+                {"id": "nope", "name": "nope", "cat": "misc", "color": "DEFAULT"},
+                {"id": "9mmq", "name": "Аптечка", "cat": "supply", "color": "RANK_VETERAN"},
+            ],
+        )
+
+    def test_unchanged_database_is_not_downloaded_again(self):
+        path = a.DIR / "catalog.json"
+        saved = [{"id": "abc", "name": "Тест", "cat": "misc", "color": "DEFAULT"}]
+        path.write_text(json.dumps(saved), encoding="utf-8")
+        old = time.time() - 4 * 86400
+        path.touch()
+        os.utime(path, (old, old))
+        with patch.object(a, "_catalog_from_exbo", return_value=None):
+            self.assertEqual(a._load_catalog(), saved)
+        self.assertGreater(path.stat().st_mtime, old + 1000)
+
+    def test_broken_listing_falls_back_to_the_archive(self):
+        fallback = [{"id": "a", "name": "A", "cat": "misc", "color": "DEFAULT"}]
+        with patch.object(a, "_catalog_from_listing", side_effect=httpx.HTTPError("нет списка")), \
+             patch.object(a, "_catalog_from_zip", return_value=fallback) as archive:
+            self.assertEqual(a._catalog_from_exbo(), fallback)
+            archive.assert_called_once()
+
     def test_empty_lots_require_no_history(self):
         with patch.object(a,'live_lots',return_value=[]), patch.object(a,'get_json') as get:
             self.assertEqual(a._buy_one(self.item),[])
