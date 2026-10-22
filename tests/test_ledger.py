@@ -61,6 +61,38 @@ class LedgerTests(unittest.TestCase):
         self.assertIsNone(row["gain"])
         self.assertEqual(0, book.snapshot()["gain"])
 
+    def test_sold_count_can_change_without_touching_the_purchase(self):
+        book.add("Бинт", 100000, 200000, 10)
+        row = book.load()[0]
+        self.assertEqual(10, row["qty"])
+        book.set_qty(row["id"], 4)
+        again = book.load()[0]
+        self.assertEqual(4, again["qty"])
+        self.assertEqual(100000, again["buy"])
+        self.assertEqual(200000, again["sell"])
+        self.assertEqual(90000, again["gain"])
+
+    def test_remove_drops_only_the_chosen_row(self):
+        book.add("Бинт", 100000, 200000, 2)
+        book.add("Аптечка", 50000, 80000, 1)
+        first = book.load()[0]["id"]
+        book.remove(first)
+        rows = book.load()
+        self.assertEqual(["Аптечка"], [row["name"] for row in rows])
+        self.assertTrue((agent.DIR / "учёт.xlsx").exists())
+
+    def test_old_sheet_without_count_still_opens(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Дата", "Предмет", "Куплено", "Продано", "После 5%", "Плюс", "id"])
+        ws.append(["22.10.2026", "Бинт", 100000, 200000, 190000, 90000, "abc"])
+        wb.save(agent.DIR / "учёт.xlsx")
+        row = book.load()[0]
+        self.assertEqual(200000, row["sell"])
+        self.assertIsNone(row["qty"])
+        self.assertEqual(90000, row["gain"])
+
     def test_sheet_date_comes_back_as_the_same_day(self):
         book.add("Бинт", 1, 2)
         day = datetime.now(agent.MSK).date()

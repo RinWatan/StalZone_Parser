@@ -106,7 +106,7 @@ def rows_from(data):
                     r.get("plan") or "ВЫКУПИТЬ",
                 ],
                 "tag": tag,
-                "deal": {"name": label, "buy": spent, "sell": asked},
+                "deal": {"name": label, "buy": spent, "sell": asked, "qty": copies * amount},
             })
         tables["buys"] = buys
     if "farm" in data:
@@ -697,9 +697,10 @@ class Bridge:
             self.note(str(error))
             return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
 
-    def ledger_add(self, name, buy, sell):
+    def ledger_add(self, name, buy, sell, qty=None):
         try:
-            created = book.add(name, int(float(buy or 0)), int(float(sell or 0)))
+            count = None if qty in (None, "") else int(float(qty))
+            created = book.add(name, int(float(buy or 0)), int(float(sell or 0)), count)
             self.note(("В учёте: " if created else "Уже в учёте сегодня: ") + str(name))
             snap = book.snapshot()
             snap["created"] = created
@@ -713,6 +714,25 @@ class Bridge:
         try:
             book.set_sell(row_id, None if not raw else agent.parse_money(raw))
             self.note("Продажа обновлена")
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_qty(self, row_id, text):
+        raw = str(text or "").strip()
+        try:
+            book.set_qty(row_id, None if not raw else agent.parse_money(raw))
+            self.note("Количество обновлено")
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_remove(self, row_id):
+        try:
+            book.remove(row_id)
+            self.note("Строка убрана из учёта")
             return book.snapshot()
         except Exception as error:
             self.note(str(error))
@@ -860,6 +880,8 @@ PAGE = r"""<!DOCTYPE html>
   .stat b.green { color: var(--green); }
   .bookstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
   #bookbox input.sell { width: 120px; text-align: right; }
+  #bookbox input.qty { width: 72px; text-align: right; }
+  #bookbox button.drop { color: var(--dim); }
   #bookbox td.num { text-align: right; font-variant-numeric: tabular-nums; }
   #bookbox .plus { color: var(--green); }
   #bookbox .minus { color: #e07a7a; }
@@ -1100,7 +1122,7 @@ function paintBuys(box, rows, rule) {
         input.checked = true;
         return;
       }
-      const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell);
+      const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell, deal.qty);
       if (res && res.ok !== false) state.book = res.rows || [];
       if (!res || res.ok === false) input.checked = false;
     };
@@ -1135,17 +1157,20 @@ function paintBook() {
     const on = state.picked.has(row.id) ? " checked" : "";
     const tone = row.gain == null ? "" : (row.gain >= 0 ? "plus" : "minus");
     const sold = row.sell == null ? "" : String(row.sell);
+    const qty = row.qty == null ? "" : String(row.qty);
     return `<tr>
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
       <td>${esc(row.name)}</td>
       <td class="num">${rubExact(row.buy)}</td>
+      <td><input class="qty" data-id="${esc(row.id)}" value="${esc(qty)}" placeholder="шт"></td>
       <td><input class="sell" data-id="${esc(row.id)}" value="${esc(sold)}" placeholder="за сколько продал"></td>
       <td class="num">${rubExact(row.net)}</td>
       <td class="num ${tone}">${rubExact(row.gain)}</td>
+      <td><button type="button" class="drop" data-id="${esc(row.id)}">Убрать</button></td>
     </tr>`;
   }).join("");
-  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Куплено</th><th>Продано</th><th>После 5%</th><th>Плюс</th></tr></thead><tbody>${body || '<tr><td colspan="7">Отметь лот на вкладке «Выкуп». Файл не затирается.</td></tr>'}</tbody></table>`;
+  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="9">Отметь лот на вкладке «Выкуп».</td></tr>'}</tbody></table>`;
   box.querySelectorAll("input.pickrow").forEach(input => input.onchange = () => {
     if (input.checked) state.picked.add(input.dataset.id);
     else state.picked.delete(input.dataset.id);
@@ -1156,6 +1181,23 @@ function paintBook() {
     if (res && res.ok !== false && res.rows) {
       state.book = res.rows;
       paintBook();
+    }
+  });
+  box.querySelectorAll("input.qty").forEach(input => input.onchange = async () => {
+    const res = await pywebview.api.ledger_qty(input.dataset.id, input.value);
+    if (res && res.ok !== false && res.rows) {
+      state.book = res.rows;
+      paintBook();
+    }
+  });
+  box.querySelectorAll("button.drop").forEach(btn => btn.onclick = async () => {
+    if (!confirm("Убрать эту строку из учёта?")) return;
+    const res = await pywebview.api.ledger_remove(btn.dataset.id);
+    if (res && res.ok !== false) {
+      state.picked.delete(btn.dataset.id);
+      state.book = res.rows || [];
+      paintBook();
+      if ($("t-buys")) paint("buys");
     }
   });
 }
@@ -1236,7 +1278,7 @@ function build() {
   const bookView = document.createElement("div");
   bookView.className = "view";
   bookView.id = "v-book";
-  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>Купил на выкупе — строка здесь и в учёт.xlsx. Дата, предмет и сумма покупки не меняются. Продажу можно поправить, 5% посчитаются сразу. Строки не удаляются.</p><p id="book-file"></p></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
+  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>Купил на выкупе — строка здесь и в учёт.xlsx. Дата, предмет и сумма покупки не меняются. Штуки и сумму продажи можно поправить, 5% считаются от суммы. Если не успел выкупить — «Убрать».</p><p id="book-file"></p></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
   main.appendChild(bookView);
   $("book-only-today").onclick = () => {
     state.picked = new Set((state.book || []).filter(row => row.today).map(row => row.id));
