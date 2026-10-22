@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 import stalzone_agent as agent
+import stalzone_ledger as book
 import stalzone_lunar as lunar
 import stalzone_pda as pda
 
@@ -87,6 +88,14 @@ def rows_from(data):
         buys = []
         for r in data.get("buys") or []:
             tag = f"q{r['qlt_i']}" if r.get("qlt_i") is not None else "buy"
+            copies = int(r.get("copies") or 1)
+            amount = int(r.get("amount") or 1)
+            spent = int(r.get("spend") or 0) or int(r.get("buyout") or 0) * copies
+            asked = int(round(float(r.get("med") or 0) * amount * copies))
+            label = r["name"]
+            extra = " ".join(part for part in (r.get("qlt") or "", r.get("ptn") or "") if part and part != "—")
+            if extra:
+                label = f"{label}, {extra}"
             buys.append({
                 "cells": [
                     r["name"], r.get("qlt") or "—", r.get("ptn") or "—",
@@ -97,6 +106,7 @@ def rows_from(data):
                     r.get("plan") or "ВЫКУПИТЬ",
                 ],
                 "tag": tag,
+                "deal": {"name": label, "buy": spent, "sell": asked},
             })
         tables["buys"] = buys
     if "farm" in data:
@@ -680,6 +690,34 @@ class Bridge:
         self._write_json("auction_fav.json", sorted(self.fav))
         return {"fav": on, "ids": sorted(self.fav)}
 
+    def ledger(self):
+        try:
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_add(self, name, buy, sell):
+        try:
+            created = book.add(name, int(float(buy or 0)), int(float(sell or 0)))
+            self.note(("В учёте: " if created else "Уже в учёте сегодня: ") + str(name))
+            snap = book.snapshot()
+            snap["created"] = created
+            return snap
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_sell(self, row_id, text):
+        raw = str(text or "").strip()
+        try:
+            book.set_sell(row_id, None if not raw else agent.parse_money(raw))
+            self.note("Продажа обновлена")
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
     def favs(self):
         return {"ids": sorted(self.fav), "recent": list(self.recent)}
 
@@ -820,6 +858,11 @@ PAGE = r"""<!DOCTYPE html>
   .stat span { display: block; color: var(--dim); font-size: 12px; margin-bottom: 6px; }
   .stat b { font-size: 22px; font-weight: 700; }
   .stat b.green { color: var(--green); }
+  .bookstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  #bookbox input.sell { width: 120px; text-align: right; }
+  #bookbox td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #bookbox .plus { color: var(--green); }
+  #bookbox .minus { color: #e07a7a; }
   main { flex: 1; min-height: 0; overflow: hidden; }
   .view { display: none; height: 100%; min-height: 0; }
   .view.on { display: flex; flex-direction: column; }
@@ -925,7 +968,7 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_BLURB = {
-  buys: "Что купить и за сколько выставить. Плюс уже после 5%.",
+  buys: "Что купить и за сколько выставить. Плюс уже после 5%. Отметь «купил» — строка ляжет в учёт.",
   farm: "Дорогой бартер: держать или слить.",
   arsenal: "Арсенал. Цена, от которой есть смысл продавать.",
   shelter_buy: "Материалы убежища, которые ещё имеет смысл брать.",
@@ -935,7 +978,7 @@ const TAB_BLURB = {
   protos: "Протоартефакты, если после комиссии есть запас."
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:""};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}};
 const $ = (id) => document.getElementById(id);
 
 function prettyMoney(raw) {
@@ -1022,19 +1065,23 @@ function paint(key) {
 
 function paintBuys(box, rows, rule) {
   const face = [[0, "Предмет"], [4, "Купить"], [7, "Плюс"], [10, "В час"]];
-  const head = face.map(([i, name]) => `<th data-i="${i}">${name}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
+  const head = `<th>Купил</th>` + face.map(([i, name]) => `<th data-i="${i}">${name}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
+  state.buyDeals = {};
   const body = rows.map(r => {
     const id = `${r.cells[0]}|${r.cells[4]}`;
     const open = state.openBuy === id;
+    if (r.deal) state.buyDeals[id] = r.deal;
+    const bought = r.deal && (state.book || []).some(row => row.today && row.name === r.deal.name && Number(row.buy) === Number(r.deal.buy));
     const cells = face.map(([i]) => `<td>${esc(r.cells[i])}</td>`).join("");
+    const boxCell = r.deal ? `<td><input type="checkbox" class="got" data-key="${esc(id)}"${bought ? " checked" : ""}></td>` : "<td></td>";
     const bits = [[1, "Редкость"], [2, "Точка"], [3, "Лоты"], [5, "Пачка"], [6, "После 5%"], [8, "Рентабельность"], [9, "Продаж в час"], [11, "План"]]
       .filter(([i]) => r.cells[i] && r.cells[i] !== "—")
       .map(([i, name]) => `<div><b>${name}.</b> ${esc(r.cells[i])}</div>`).join("");
-    const more = open ? `<tr class="more"><td colspan="4">${bits}<button type="button" class="ingame">Найти в аукционе</button></td></tr>` : "";
-    return `<tr class="face ${r.tag || ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${cells}</tr>${more}`;
+    const more = open ? `<tr class="more"><td colspan="5">${bits}<button type="button" class="ingame">Найти в аукционе</button></td></tr>` : "";
+    return `<tr class="face ${r.tag || ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${boxCell}${cells}</tr>${more}`;
   }).join("");
-  box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="4">Прогон найдёт подходящие лоты</td></tr>'}</tbody></table>`;
-  box.querySelectorAll("th").forEach(th => th.onclick = () => {
+  box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="5">Прогон найдёт подходящие лоты</td></tr>'}</tbody></table>`;
+  box.querySelectorAll("th[data-i]").forEach(th => th.onclick = () => {
     const i = Number(th.dataset.i);
     const prev = state.sort.buys;
     state.sort.buys = {i, desc: prev && prev.i === i ? !prev.desc : true};
@@ -1044,11 +1091,81 @@ function paintBuys(box, rows, rule) {
     state.openBuy = state.openBuy === tr.dataset.id ? "" : tr.dataset.id;
     paint("buys");
   });
+  box.querySelectorAll("input.got").forEach(input => {
+    input.onclick = (event) => event.stopPropagation();
+    input.onchange = async () => {
+      const deal = state.buyDeals[input.dataset.key];
+      if (!deal) return;
+      if (!input.checked) {
+        input.checked = true;
+        return;
+      }
+      const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell);
+      if (res && res.ok !== false) state.book = res.rows || [];
+      if (!res || res.ok === false) input.checked = false;
+    };
+  });
   box.querySelectorAll("button.ingame").forEach(btn => btn.onclick = (event) => {
     event.stopPropagation();
     const row = btn.closest("tr").previousElementSibling;
     pywebview.api.game_search(row ? row.dataset.name : "");
   });
+}
+
+function rubExact(n) {
+  if (n == null || n === "") return "—";
+  const sign = n < 0 ? "−" : "";
+  return sign + Math.abs(Math.round(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
+function paintBook() {
+  const box = $("bookbox");
+  if (!box) return;
+  const rows = state.book || [];
+  let picked = 0;
+  rows.forEach(row => {
+    if (state.picked.has(row.id) && row.sell != null && row.gain != null) picked += Number(row.gain) || 0;
+  });
+  const total = rows.reduce((sum, row) => sum + (row.sell == null ? 0 : Number(row.gain) || 0), 0);
+  const today = rows.reduce((sum, row) => sum + (row.today && row.sell != null ? Number(row.gain) || 0 : 0), 0);
+  if ($("book-gain")) $("book-gain").textContent = rubExact(total);
+  if ($("book-today-gain")) $("book-today-gain").textContent = rubExact(today);
+  if ($("book-picked")) $("book-picked").textContent = rubExact(picked);
+  const body = rows.map(row => {
+    const on = state.picked.has(row.id) ? " checked" : "";
+    const tone = row.gain == null ? "" : (row.gain >= 0 ? "plus" : "minus");
+    const sold = row.sell == null ? "" : String(row.sell);
+    return `<tr>
+      <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
+      <td>${esc(row.date_ru)}</td>
+      <td>${esc(row.name)}</td>
+      <td class="num">${rubExact(row.buy)}</td>
+      <td><input class="sell" data-id="${esc(row.id)}" value="${esc(sold)}" placeholder="за сколько продал"></td>
+      <td class="num">${rubExact(row.net)}</td>
+      <td class="num ${tone}">${rubExact(row.gain)}</td>
+    </tr>`;
+  }).join("");
+  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Куплено</th><th>Продано</th><th>После 5%</th><th>Плюс</th></tr></thead><tbody>${body || '<tr><td colspan="7">Отметь лот на вкладке «Выкуп». Файл не затирается.</td></tr>'}</tbody></table>`;
+  box.querySelectorAll("input.pickrow").forEach(input => input.onchange = () => {
+    if (input.checked) state.picked.add(input.dataset.id);
+    else state.picked.delete(input.dataset.id);
+    paintBook();
+  });
+  box.querySelectorAll("input.sell").forEach(input => input.onchange = async () => {
+    const res = await pywebview.api.ledger_sell(input.dataset.id, input.value);
+    if (res && res.ok !== false && res.rows) {
+      state.book = res.rows;
+      paintBook();
+    }
+  });
+}
+
+async function loadBook() {
+  const data = await pywebview.api.ledger();
+  state.book = data.rows || [];
+  state.bookPath = data.path || "";
+  if ($("book-file")) $("book-file").textContent = state.bookPath ? "Файл: " + state.bookPath : "";
+  paintBook();
 }
 
 function build() {
@@ -1111,6 +1228,28 @@ function build() {
   mapView.id = "v-map";
   mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div id="mapstatus" role="status" style="padding:4px 8px;color:var(--dim)">Карты Лунара загрузятся при открытии вкладки.</div><div class="tools" id="maplayers"></div><div id="wikimap"></div></div>`;
   main.appendChild(mapView);
+  const bookBtn = document.createElement("button");
+  bookBtn.textContent = "Учёт";
+  bookBtn.dataset.key = "book";
+  bookBtn.onclick = () => show("book");
+  tabs.insertBefore(bookBtn, tabs.children[1] || null);
+  const bookView = document.createElement("div");
+  bookView.className = "view";
+  bookView.id = "v-book";
+  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>Купил на выкупе — строка здесь и в учёт.xlsx. Дата, предмет и сумма покупки не меняются. Продажу можно поправить, 5% посчитаются сразу. Строки не удаляются.</p><p id="book-file"></p></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
+  main.appendChild(bookView);
+  $("book-only-today").onclick = () => {
+    state.picked = new Set((state.book || []).filter(row => row.today).map(row => row.id));
+    paintBook();
+  };
+  $("book-all").onclick = () => {
+    state.picked = new Set((state.book || []).map(row => row.id));
+    paintBook();
+  };
+  $("book-clear").onclick = () => {
+    state.picked = new Set();
+    paintBook();
+  };
 }
 
 function mapViewOf(settings) {
@@ -1580,6 +1719,7 @@ function show(key) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
+  if (key === "book") loadBook();
   if (key === "map") {
     if (!state.mapBooted) {
       state.mapBooted = true;
@@ -1773,6 +1913,7 @@ window.addEventListener("pywebviewready", async () => {
   $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");
   $("lq").innerHTML = boot.qlt.map(s => `<option>${esc(s)}</option>`).join("");
   state.catKeys = await pywebview.api.cat_keys();
+  await loadBook();
   wire();
   $("expand").onclick = () => pywebview.api.hud_action(document.body.classList.contains("full") ? "compact" : "full");
   $("backgame").onclick = () => pywebview.api.hud_action("passive");
