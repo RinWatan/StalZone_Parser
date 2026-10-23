@@ -881,7 +881,11 @@ PAGE = r"""<!DOCTYPE html>
   .bookstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
   #bookbox input.sell { width: 120px; text-align: right; }
   #bookbox input.qty { width: 72px; text-align: right; }
-  #bookbox button.drop { color: var(--dim); }
+  #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, 0.72); align-items: center; justify-content: center; }
+  #ask.on { display: flex; }
+  .ask-card { width: min(420px, calc(100% - 32px)); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); }
+  .ask-card p { margin: 0 0 16px; }
+  .ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
   #bookbox td.num { text-align: right; font-variant-numeric: tabular-nums; }
   #bookbox .plus { color: var(--green); }
   #bookbox .minus { color: #e07a7a; }
@@ -941,6 +945,7 @@ PAGE = r"""<!DOCTYPE html>
 </style>
 </head>
 <body data-screen="buys">
+<div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
 <header class="pywebview-drag-region">
   <div class="compact-brand"><span class="logo">S</span><h1>STALZONE</h1></div>
   <div id="status" role="status">ожидание</div>
@@ -1191,7 +1196,9 @@ function paintBook() {
     }
   });
   box.querySelectorAll("button.drop").forEach(btn => btn.onclick = async () => {
-    if (!confirm("Убрать эту строку из учёта?")) return;
+    const row = (state.book || []).find(item => item.id === btn.dataset.id);
+    const name = row && row.name ? row.name : "этот лот";
+    if (!await ask("Убрать «" + name + "» из учёта?")) return;
     const res = await pywebview.api.ledger_remove(btn.dataset.id);
     if (res && res.ok !== false) {
       state.picked.delete(btn.dataset.id);
@@ -1466,7 +1473,7 @@ function paintMarks() {
       point.on("click", async (event) => {
         L.DomEvent.stopPropagation(event);
         if (state.placing) return;
-        if (!confirm("Убрать метку «" + mark.title + "»?")) return;
+        if (!await ask("Убрать метку «" + mark.title + "»?")) return;
         const slug = state.pack.slug;
         const mine = await pywebview.api.delete_mark(slug, mark.id);
         if (state.pack.slug !== slug) return;
@@ -1739,7 +1746,7 @@ function paintLunar() {
       point.on("click", async (event) => {
         L.DomEvent.stopPropagation(event);
         if (state.placing) return;
-        if (!confirm("Убрать метку «" + mark.title + "»?")) return;
+        if (!await ask("Убрать метку «" + mark.title + "»?")) return;
         const here = state.pack.slug;
         const mine = await pywebview.api.delete_mark(here, mark.id);
         if (state.pack.slug !== here) return;
@@ -1784,6 +1791,32 @@ function show(key) {
       setTimeout(() => state.wiki.invalidateSize(), 60);
     }
   }
+}
+
+function ask(text) {
+  const veil = $("ask");
+  $("ask-text").textContent = text;
+  veil.classList.add("on");
+  return new Promise(resolve => {
+    const finish = (value) => {
+      veil.classList.remove("on");
+      veil.onclick = null;
+      $("ask-no").onclick = null;
+      $("ask-yes").onclick = null;
+      document.removeEventListener("keydown", onKey, true);
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      finish(false);
+    };
+    $("ask-no").onclick = () => finish(false);
+    $("ask-yes").onclick = () => finish(true);
+    veil.onclick = (event) => { if (event.target === veil) finish(false); };
+    document.addEventListener("keydown", onKey, true);
+  });
 }
 
 function esc(s) {
@@ -1964,7 +1997,11 @@ window.addEventListener("pywebviewready", async () => {
   $("quickrun").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, "Выкуп");
   $("quickstop").onclick = () => pywebview.api.stop_run();
   document.querySelectorAll("[data-order]").forEach(b => b.onclick = () => setOrder(state.order === "hour" ? "gain" : "hour"));
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); pywebview.api.hud_action("passive"); } });
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || $("ask").classList.contains("on")) return;
+    e.preventDefault();
+    pywebview.api.hud_action("passive");
+  });
   TAB_ORDER.forEach(paint);
   setInterval(tick, 400);
   tick();
