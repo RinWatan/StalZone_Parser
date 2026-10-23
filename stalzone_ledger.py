@@ -220,7 +220,25 @@ def set_sell(row_id, sell):
 
 
 def set_qty(row_id, qty):
-    _change(row_id, "qty", None if qty is None else int(qty))
+    ident = str(row_id or "").strip()
+    new = None if qty is None else int(qty)
+    with _LOCK:
+        rows = _load_locked()
+        found = False
+        for row in rows:
+            if row["id"] != ident:
+                continue
+            found = True
+            old = row.get("qty")
+            if old and new and int(old) > 0 and new != int(old):
+                row["buy"] = int(round(int(row["buy"] or 0) * new / int(old)))
+                if row.get("sell") is not None:
+                    row["sell"] = int(round(int(row["sell"]) * new / int(old)))
+            row["qty"] = new
+            break
+        if not found:
+            raise ValueError("Строки нет в учёте")
+        _write_locked(rows)
 
 
 def remove(row_id):

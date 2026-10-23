@@ -61,16 +61,18 @@ class LedgerTests(unittest.TestCase):
         self.assertIsNone(row["gain"])
         self.assertEqual(0, book.snapshot()["gain"])
 
-    def test_sold_count_can_change_without_touching_the_purchase(self):
-        book.add("Бинт", 100000, 200000, 10)
+    def test_changing_the_count_rescales_the_purchase_and_the_sale(self):
+        book.add("Осколок", 2200000, 2390000, 2)
         row = book.load()[0]
-        self.assertEqual(10, row["qty"])
-        book.set_qty(row["id"], 4)
+        book.set_qty(row["id"], 3)
         again = book.load()[0]
-        self.assertEqual(4, again["qty"])
-        self.assertEqual(100000, again["buy"])
-        self.assertEqual(200000, again["sell"])
-        self.assertEqual(90000, again["gain"])
+        self.assertEqual(3, again["qty"])
+        self.assertEqual(3300000, again["buy"])
+        self.assertEqual(3585000, again["sell"])
+        self.assertEqual(3405750, again["net"])
+        self.assertEqual(105750, again["gain"])
+        self.assertEqual(row["date"], again["date"])
+        self.assertEqual("Осколок", again["name"])
 
     def test_remove_drops_only_the_chosen_row(self):
         book.add("Бинт", 100000, 200000, 2)

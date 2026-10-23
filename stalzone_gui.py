@@ -723,7 +723,7 @@ class Bridge:
         raw = str(text or "").strip()
         try:
             book.set_qty(row_id, None if not raw else agent.parse_money(raw))
-            self.note("Количество обновлено")
+            self.note("Количество обновлено, суммы пересчитаны")
             return book.snapshot()
         except Exception as error:
             self.note(str(error))
@@ -1285,7 +1285,7 @@ function build() {
   const bookView = document.createElement("div");
   bookView.className = "view";
   bookView.id = "v-book";
-  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>Купил на выкупе — строка здесь и в учёт.xlsx. Дата, предмет и сумма покупки не меняются. Штуки и сумму продажи можно поправить, 5% считаются от суммы. Если не успел выкупить — «Убрать».</p><p id="book-file"></p></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
+  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>Купил на выкупе — строка здесь и в учёт.xlsx. Дата и предмет не меняются. Если докупил и написал больше штук, покупка и продажа пересчитаются за штуку, 5% сразу. Сумму продажи можно поправить отдельно. Если не успел выкупить — «Убрать».</p><p id="book-file"></p></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
   main.appendChild(bookView);
   $("book-only-today").onclick = () => {
     state.picked = new Set((state.book || []).filter(row => row.today).map(row => row.id));
