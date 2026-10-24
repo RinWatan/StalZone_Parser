@@ -914,6 +914,61 @@ def _left(value):
     return f"{hours}ч {minutes}м" if hours else f"{minutes}м"
 
 
+def auction_price_stats(data, qname="Все", lo=0, hi=15):
+    """Up to 100 completed sales within a week, each valued per unit."""
+    now = time.time()
+    cutoff = now - 7 * 86400
+    try:
+        lo, hi = int(lo), int(hi)
+    except (TypeError, ValueError):
+        lo, hi = 0, 15
+    pages = data.setdefault("history_pages", [])
+    sample = []
+    truncated = False
+    while True:
+        sample = []
+        oldest = None
+        for page in pages:
+            for row in page:
+                try:
+                    dt = datetime.fromisoformat(str(row.get("time")).replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        continue
+                    ts = dt.timestamp()
+                    oldest = ts if oldest is None else min(oldest, ts)
+                    amount = int(row.get("amount") or 0)
+                    price = float(row.get("price") or 0)
+                    add = row.get("additional") or {}
+                    quality = add.get("qlt")
+                    point = int(add.get("ptn") or 0)
+                    if not cutoff <= ts <= now or amount <= 0 or not 0 < price < float('inf'):
+                        continue
+                    if qname and qname != "Все" and _qname(quality) != qname:
+                        continue
+                    if quality is not None and not lo <= point <= hi:
+                        continue
+                    sample.append((ts, price / amount))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        sample.sort(key=lambda row: row[0], reverse=True)
+        if len(sample) >= 100:
+            sample = sample[:100]
+            break
+        # EXBO returns history newest first. Short pages exhaust the history.
+        if pages and (len(pages[-1]) < 200 or (oldest is not None and oldest < cutoff)):
+            break
+        if len(pages) >= 50:
+            truncated = True
+            break
+        offset = len(pages) * 200
+        result = get_json(f"{EXBO}/RU/auction/{data['slug']}/history?additional=true&limit=200&offset={offset}")
+        pages.append(result.get("prices") or [])
+    units = [unit for _ts, unit in sample]
+    return {"mean": statistics.mean(units) if units else None,
+            "median": statistics.median(units) if units else None,
+            "count": len(units), "truncated": truncated}
+
+
 def item_view(slug, name=""):
     """Живые лоты и последние продажи одного предмета с EXBO."""
     lots_raw = []
@@ -967,7 +1022,10 @@ def item_view(slug, name=""):
             "unit": price / amt,
         })
     verdict = flip_reason(slug, name or slug, lots_raw, _sales_book(hist.get("prices") or []), allow_single=True)
-    return {"lots": lots, "sales": sales, "total": total or len(lots_raw), "verdict": verdict}
+    return {
+        "lots": lots, "sales": sales, "total": total or len(lots_raw), "verdict": verdict,
+        "slug": slug, "history_pages": [hist.get("prices") or []],
+    }
 
 
 def write_buys(rows):

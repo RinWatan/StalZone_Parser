@@ -166,6 +166,9 @@ class Bridge:
         self.fav = set(self._read_json("auction_fav.json"))
         self.recent = self._read_json("auction_recent.json")
         self.lot_data = None
+        self._stats_lock = threading.Lock()
+        self._item_lock = threading.Lock()
+        self._item_generation = 0
         self.open_slug = None
         self._wiki = {}
         self._hud = None
@@ -778,7 +781,11 @@ class Bridge:
     def open_item(self, slug, name, qname, lo, hi):
         if not slug:
             return {"ok": False, "error": "Выбери предмет слева"}
-        self.open_slug = slug
+        with self._item_lock:
+            self._item_generation += 1
+            generation = self._item_generation
+            self.open_slug = slug
+            self.lot_data = None
         self.recent = [slug] + [x for x in self.recent if x != slug]
         self.recent = self.recent[:30]
         self._write_json("auction_recent.json", self.recent)
@@ -788,8 +795,12 @@ class Bridge:
         except Exception as e:
             self.note(f"Ошибка: {e}")
             return {"ok": False, "error": str(e)}
-        self.lot_data = data
-        return self._lots_payload(name, data, qname, lo, hi)
+        payload = self._lots_payload(name, data, qname, lo, hi)
+        with self._item_lock:
+            if generation != self._item_generation:
+                return {"ok": False, "error": "Выбран другой предмет"}
+            self.lot_data = data
+        return payload
 
     def filter_open(self, qname, lo, hi):
         if not self.lot_data:
@@ -833,7 +844,26 @@ class Bridge:
         if name:
             info = f"{name}: {info}"
             self.note(info)
-        return {"ok": True, "info": info, "lots": lot_rows, "sales": sale_rows}
+        try:
+            with self._stats_lock:
+                stats = agent.auction_price_stats(data, qname, lo, hi)
+            if stats["count"]:
+                summary = (f"Средняя: {money(stats['mean'])} ₽/шт · "
+                           f"Медиана: {money(stats['median'])} ₽/шт · "
+                           f"Сделок: {stats['count']} · До 100 последних продаж за 7 дней")
+                if stats["count"] < 5:
+                    summary += " · Малая выборка"
+                if stats["truncated"]:
+                    summary += " · Неполная история: достигнут предел загрузки"
+            else:
+                summary = "Нет продаж за 7 дней для выбранных фильтров"
+                if stats["truncated"]:
+                    summary = "В загруженной части истории нет продаж для выбранных фильтров · Неполная история"
+        except Exception:
+            stats = None
+            summary = "Статистика недоступна: не удалось загрузить историю"
+        return {"ok": True, "info": info, "lots": lot_rows, "sales": sale_rows,
+                "stats": stats, "summary": summary}
 
 
 PAGE = r"""<!DOCTYPE html>
@@ -972,6 +1002,7 @@ PAGE = r"""<!DOCTYPE html>
   tr.more td { white-space: normal; color: var(--dim); background: #121816; }
   tr.face { cursor: pointer; }
   #lotinfo { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  #lotstats { color: var(--dim); font-size: 13px; padding: 4px 2px 8px; }
   .sub { display: flex; gap: 6px; }
   .sub button.on { color: #06210f; background: var(--green); }
   .detail .sheet { background: var(--card); }
@@ -1046,7 +1077,7 @@ const TAB_BLURB = {
   protos: "Протоартефакты, если после комиссии есть запас."
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}};
 const $ = (id) => document.getElementById(id);
 
 function prettyMoney(raw) {
@@ -1396,6 +1427,7 @@ function build() {
       <aside class="detail">
         <h2 id="detail-name">Лот</h2>
         <div id="lotinfo">Кликни предмет слева. Здесь будет цена, медиана и почему его брать или нет.</div>
+        <div id="lotstats" title="Цена продажи делится на количество предметов. Каждая сделка имеет одинаковый вес. Учитываются выбранные редкость и заточка."></div>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
         <div class="sheet" id="lotbox"></div>
       </aside>
@@ -2077,16 +2109,32 @@ function lotTable(rows, cols) {
   $("lotbox").innerHTML = `<table><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function auctionLoading(on) {
+  state.itemLoading = on;
+  for (const id of ["lq", "lo", "hi"]) {
+    const node = $(id);
+    if (node) node.disabled = on;
+  }
+}
+
 async function openItem() {
   if (!selected) return;
+  const request = ++state.detailRequest;
+  auctionLoading(true);
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
   $("detail-name").textContent = name;
   $("lotinfo").textContent = name + ": читаю лоты…";
-  const data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value);
-  if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; return; }
+  $("lotstats").textContent = "Считаю среднюю и медиану…";
+  let data;
+  try { data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value); }
+  catch (error) { data = {ok:false, error:String(error)}; }
+  if (request !== state.detailRequest) return;
+  auctionLoading(false);
+  if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; $("lotstats").textContent = ""; return; }
   state.lots = data.lots; state.sales = data.sales;
   $("lotinfo").textContent = data.info;
+  $("lotstats").textContent = data.summary || "";
   showLots();
 }
 
@@ -2105,10 +2153,15 @@ function wire() {
   $("asort").onchange = renderItems;
   $("budget").addEventListener("change", () => { $("budget").value = prettyMoney($("budget").value); });
   $("lq").onchange = $("lo").onchange = $("hi").onchange = async () => {
+    if (state.itemLoading) return;
+    const request = ++state.detailRequest;
+    $("lotstats").textContent = "Пересчитываю по выбранным фильтрам…";
     const data = await pywebview.api.filter_open($("lq").value, $("lo").value, $("hi").value);
-    if (!data.ok) return;
+    if (request !== state.detailRequest) return;
+    if (!data.ok) { $("lotstats").textContent = ""; return; }
     state.lots = data.lots; state.sales = data.sales;
     if (data.info) $("lotinfo").textContent = data.info;
+    $("lotstats").textContent = data.summary || "";
     showLots();
   };
   $("now").onclick = () => { state.lot = "now"; $("now").classList.add("on"); $("hist").classList.remove("on"); showLots(); };
