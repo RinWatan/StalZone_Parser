@@ -915,6 +915,11 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox input.name { width: 220px; text-align: left; }
   .own { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .own input { width: 140px; text-align: left; }
+  .namebox { position: relative; flex: 1 1 260px; min-width: 220px; }
+  .namebox input { width: 100%; text-align: left; }
+  .namelist { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; width: min(420px, 70vw); max-height: 240px; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
+  .namelist button { display: block; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 0; padding: 8px 12px; }
+  .namelist button.on, .namelist button:hover { background: var(--green-dim); color: var(--green); }
   .own .cut { color: var(--dim); font-size: 13px; }
   .own .cut b { color: var(--ink); font-weight: 700; }
   #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, 0.72); align-items: center; justify-content: center; }
@@ -1199,6 +1204,45 @@ function cutOf(sell, buy) {
   return {net, gain: net - (buy || 0)};
 }
 
+function paintOwnList() {
+  const input = $("own-name");
+  const list = $("own-list");
+  if (!input || !list) return;
+  const query = input.value.trim().toLowerCase();
+  if (!query) {
+    list.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  const seen = new Set();
+  const pool = [];
+  const push = (name, used) => {
+    const title = String(name || "").trim();
+    const key = title.toLowerCase();
+    if (!title || seen.has(key) || !key.includes(query)) return;
+    seen.add(key);
+    pool.push({title, used, start: key.startsWith(query)});
+  };
+  (state.book || []).forEach(row => push(row.name, true));
+  (state.catalog || []).forEach(item => push(item.name, false));
+  pool.sort((a, b) => Number(b.start) - Number(a.start) || Number(b.used) - Number(a.used) || a.title.localeCompare(b.title, "ru"));
+  const shown = pool.slice(0, 12);
+  if (!shown.length) {
+    list.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  if (state.ownPick >= shown.length) state.ownPick = shown.length - 1;
+  if (state.ownPick < 0) state.ownPick = 0;
+  list.hidden = false;
+  list.innerHTML = shown.map((item, index) => `<button type="button" class="${index === state.ownPick ? "on" : ""}" data-name="${esc(item.title)}">${esc(item.title)}</button>`).join("");
+  list.querySelectorAll("button").forEach(btn => btn.onmousedown = (event) => {
+    event.preventDefault();
+    input.value = btn.dataset.name;
+    list.hidden = true;
+  });
+}
+
 function showCut(netNode, gainNode, sell, buy) {
   const cut = cutOf(sell, buy);
   if (netNode) netNode.textContent = rubExact(cut.net);
@@ -1375,7 +1419,7 @@ function build() {
   const bookView = document.createElement("div");
   bookView.className = "view";
   bookView.id = "v-book";
-  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>С выкупа строка встаёт сама. Свою позицию добавляешь сверху: правится всё, кроме даты. После 5% и плюс считаются сразу. На строке с выкупа штуки пересчитывают суммы за штуку.</p><p id="book-file"></p></div><div class="own"><input id="own-name" placeholder="Предмет"><input id="own-buy" placeholder="Куплено"><input id="own-qty" placeholder="Штук"><input id="own-sell" placeholder="Продано"><span class="cut">После 5% <b id="own-net">—</b></span><span class="cut">Плюс <b id="own-gain">—</b></span><button type="button" id="own-add" class="gold">Добавить</button></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
+  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>С выкупа строка встаёт сама. Свою позицию добавляешь сверху: название выбирается из списка, правится всё, кроме даты. После 5% и плюс считаются сразу. На строке с выкупа штуки пересчитывают суммы за штуку.</p><p id="book-file"></p></div><div class="own"><div class="namebox"><input id="own-name" placeholder="Начни вводить предмет" autocomplete="off"><div id="own-list" class="namelist" hidden></div></div><input id="own-buy" placeholder="Куплено"><input id="own-qty" placeholder="Штук"><input id="own-sell" placeholder="Продано"><span class="cut">После 5% <b id="own-net">—</b></span><span class="cut">Плюс <b id="own-gain">—</b></span><button type="button" id="own-add" class="gold">Добавить</button></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
   main.appendChild(bookView);
   $("book-only-today").onclick = () => {
     state.picked = new Set((state.book || []).filter(row => row.today).map(row => row.id));
@@ -1391,6 +1435,32 @@ function build() {
   };
   const previewOwn = () => showCut($("own-net"), $("own-gain"), moneyOf($("own-sell").value), moneyOf($("own-buy").value) || 0);
   ["own-buy", "own-sell"].forEach(id => $(id).oninput = previewOwn);
+  state.ownPick = 0;
+  $("own-name").oninput = () => { state.ownPick = 0; paintOwnList(); };
+  $("own-name").onfocus = () => {
+    if (!state.catalog.length) pywebview.api.load_catalog();
+    paintOwnList();
+  };
+  $("own-name").onkeydown = (event) => {
+    const buttons = [...$("own-list").querySelectorAll("button")];
+    const open = !$("own-list").hidden && buttons.length;
+    if (event.key === "ArrowDown" && open) {
+      event.preventDefault();
+      state.ownPick = Math.min(buttons.length - 1, state.ownPick + 1);
+      paintOwnList();
+    } else if (event.key === "ArrowUp" && open) {
+      event.preventDefault();
+      state.ownPick = Math.max(0, state.ownPick - 1);
+      paintOwnList();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (open) {
+        $("own-name").value = buttons[state.ownPick].dataset.name;
+        $("own-list").hidden = true;
+      } else $("own-add").click();
+    } else if (event.key === "Escape") $("own-list").hidden = true;
+  };
+  $("own-name").onblur = () => setTimeout(() => { if ($("own-list")) $("own-list").hidden = true; }, 160);
   $("own-add").onclick = async () => {
     const name = $("own-name").value.trim();
     if (!name) return;
@@ -1398,6 +1468,7 @@ function build() {
     if (res && res.ok !== false && res.rows) {
       state.book = res.rows;
       ["own-name", "own-buy", "own-qty", "own-sell"].forEach(id => { $(id).value = ""; });
+      $("own-list").hidden = true;
       previewOwn();
       paintBook();
     }
@@ -1871,7 +1942,10 @@ function show(key) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if (key === "auc" && !state.catalog.length) loadCatalog();
-  if (key === "book") loadBook();
+  if (key === "book") {
+    loadBook();
+    if (!state.catalog.length) pywebview.api.load_catalog();
+  }
   if (key === "map") {
     if (!state.mapBooted) {
       state.mapBooted = true;
@@ -1995,6 +2069,7 @@ function applyCatalog(data) {
     return;
   }
   renderItems();
+  if ($("own-name") && document.activeElement === $("own-name")) paintOwnList();
 }
 
 function lotTable(rows, cols) {
