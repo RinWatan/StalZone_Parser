@@ -93,9 +93,31 @@ class LedgerTests(unittest.TestCase):
         row = book.load()[0]
         self.assertEqual(200000, row["sell"])
         self.assertIsNone(row["qty"])
+        self.assertFalse(row["hand"])
         self.assertEqual(90000, row["gain"])
 
-    def test_sheet_date_comes_back_as_the_same_day(self):
+    def test_own_position_keeps_the_date_and_edits_the_rest(self):
+        self.assertTrue(book.add("Свой лот", 1100000, 1800000, 1, hand=True))
+        self.assertTrue(book.add("Свой лот", 1100000, 1800000, 1, hand=True))
+        row = book.load()[0]
+        self.assertTrue(row["hand"])
+        self.assertEqual(1710000, row["net"])
+        self.assertEqual(610000, row["gain"])
+        book.set_name(row["id"], "Другой лот")
+        book.set_buy(row["id"], 1500000)
+        book.set_qty(row["id"], 4)
+        book.set_sell(row["id"], 2000000)
+        again = book.load()[0]
+        self.assertEqual(row["date"], again["date"])
+        self.assertEqual("Другой лот", again["name"])
+        self.assertEqual(1500000, again["buy"])
+        self.assertEqual(4, again["qty"])
+        self.assertEqual(1900000, again["net"])
+        self.assertEqual(400000, again["gain"])
+        scan = book.add("Осколок", 100, 200, 2)
+        self.assertTrue(scan)
+        with self.assertRaises(ValueError):
+            book.set_buy(book.load()[2]["id"], 300)
         book.add("Бинт", 1, 2)
         day = datetime.now(agent.MSK).date()
         self.assertEqual(day, book.load()[0]["date"])

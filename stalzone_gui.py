@@ -709,6 +709,35 @@ class Bridge:
             self.note(str(error))
             return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
 
+    def ledger_hand(self, name, buy, sell, qty=None):
+        try:
+            count = None if str(qty or "").strip() == "" else int(agent.parse_money(qty))
+            sold = agent.parse_money(sell) if str(sell or "").strip() else 0
+            book.add(str(name or "").strip(), agent.parse_money(buy), sold, count, hand=True)
+            self.note("Своя позиция: " + str(name))
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_name(self, row_id, name):
+        try:
+            book.set_name(row_id, name)
+            self.note("Название обновлено")
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_buy(self, row_id, text):
+        try:
+            book.set_buy(row_id, agent.parse_money(text))
+            self.note("Покупка обновлена")
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
     def ledger_sell(self, row_id, text):
         raw = str(text or "").strip()
         try:
@@ -723,8 +752,10 @@ class Bridge:
         raw = str(text or "").strip()
         try:
             book.set_qty(row_id, None if not raw else agent.parse_money(raw))
-            self.note("Количество обновлено, суммы пересчитаны")
-            return book.snapshot()
+            snap = book.snapshot()
+            row = next((item for item in snap["rows"] if item["id"] == str(row_id)), None)
+            self.note("Количество обновлено" if row and row.get("hand") else "Количество обновлено, суммы пересчитаны")
+            return snap
         except Exception as error:
             self.note(str(error))
             return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
@@ -880,7 +911,12 @@ PAGE = r"""<!DOCTYPE html>
   .stat b.green { color: var(--green); }
   .bookstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
   #bookbox input.sell { width: 120px; text-align: right; }
-  #bookbox input.qty { width: 72px; text-align: right; }
+  #bookbox input.qty, #bookbox input.buy { width: 110px; text-align: right; }
+  #bookbox input.name { width: 220px; text-align: left; }
+  .own { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .own input { width: 140px; text-align: left; }
+  .own .cut { color: var(--dim); font-size: 13px; }
+  .own .cut b { color: var(--ink); font-weight: 700; }
   #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, 0.72); align-items: center; justify-content: center; }
   #ask.on { display: flex; }
   .ask-card { width: min(420px, calc(100% - 32px)); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); }
@@ -1145,6 +1181,33 @@ function rubExact(n) {
   return sign + Math.abs(Math.round(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 }
 
+function moneyOf(text) {
+  let raw = String(text || "").trim().toLowerCase().replace(/\s/g, "").replace(/\u00a0/g, "");
+  if (!raw) return null;
+  let mult = 1;
+  if (raw.endsWith("кк")) { mult = 1000000; raw = raw.slice(0, -2); }
+  else if (raw.endsWith("м")) { mult = 1000000; raw = raw.slice(0, -1); }
+  else if (raw.endsWith("к")) { mult = 1000; raw = raw.slice(0, -1); }
+  raw = raw.replace(",", ".");
+  const n = Number(raw.replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) ? Math.round(n * mult) : null;
+}
+
+function cutOf(sell, buy) {
+  if (sell == null) return {net: null, gain: null};
+  const net = Math.floor(sell * 95 / 100);
+  return {net, gain: net - (buy || 0)};
+}
+
+function showCut(netNode, gainNode, sell, buy) {
+  const cut = cutOf(sell, buy);
+  if (netNode) netNode.textContent = rubExact(cut.net);
+  if (!gainNode) return;
+  gainNode.textContent = rubExact(cut.gain);
+  gainNode.classList.toggle("plus", cut.gain != null && cut.gain >= 0);
+  gainNode.classList.toggle("minus", cut.gain != null && cut.gain < 0);
+}
+
 function paintBook() {
   const box = $("bookbox");
   if (!box) return;
@@ -1163,24 +1226,37 @@ function paintBook() {
     const tone = row.gain == null ? "" : (row.gain >= 0 ? "plus" : "minus");
     const sold = row.sell == null ? "" : String(row.sell);
     const qty = row.qty == null ? "" : String(row.qty);
-    return `<tr>
+    const name = row.hand
+      ? `<input class="name" data-id="${esc(row.id)}" value="${esc(row.name)}">`
+      : esc(row.name);
+    const buy = row.hand
+      ? `<input class="buy" data-id="${esc(row.id)}" value="${esc(String(row.buy))}">`
+      : `<span class="num">${rubExact(row.buy)}</span>`;
+    return `<tr data-buy="${esc(String(row.buy))}">
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
-      <td>${esc(row.name)}</td>
-      <td class="num">${rubExact(row.buy)}</td>
+      <td>${name}</td>
+      <td class="num">${buy}</td>
       <td><input class="qty" data-id="${esc(row.id)}" value="${esc(qty)}" placeholder="шт"></td>
       <td><input class="sell" data-id="${esc(row.id)}" value="${esc(sold)}" placeholder="за сколько продал"></td>
-      <td class="num">${rubExact(row.net)}</td>
-      <td class="num ${tone}">${rubExact(row.gain)}</td>
+      <td class="num net">${rubExact(row.net)}</td>
+      <td class="num gain ${tone}">${rubExact(row.gain)}</td>
       <td><button type="button" class="drop" data-id="${esc(row.id)}">Убрать</button></td>
     </tr>`;
   }).join("");
-  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="9">Отметь лот на вкладке «Выкуп».</td></tr>'}</tbody></table>`;
+  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="9">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
   box.querySelectorAll("input.pickrow").forEach(input => input.onchange = () => {
     if (input.checked) state.picked.add(input.dataset.id);
     else state.picked.delete(input.dataset.id);
     paintBook();
   });
+  const refreshCut = (input) => {
+    const tr = input.closest("tr");
+    const buyInput = tr.querySelector("input.buy");
+    const buy = buyInput ? (moneyOf(buyInput.value) || 0) : Number(tr.dataset.buy || 0);
+    showCut(tr.querySelector(".net"), tr.querySelector(".gain"), moneyOf(tr.querySelector("input.sell").value), buy);
+  };
+  box.querySelectorAll("input.sell, input.buy").forEach(input => input.oninput = () => refreshCut(input));
   box.querySelectorAll("input.sell").forEach(input => input.onchange = async () => {
     const res = await pywebview.api.ledger_sell(input.dataset.id, input.value);
     if (res && res.ok !== false && res.rows) {
@@ -1190,6 +1266,20 @@ function paintBook() {
   });
   box.querySelectorAll("input.qty").forEach(input => input.onchange = async () => {
     const res = await pywebview.api.ledger_qty(input.dataset.id, input.value);
+    if (res && res.ok !== false && res.rows) {
+      state.book = res.rows;
+      paintBook();
+    }
+  });
+  box.querySelectorAll("input.name").forEach(input => input.onchange = async () => {
+    const res = await pywebview.api.ledger_name(input.dataset.id, input.value);
+    if (res && res.ok !== false && res.rows) {
+      state.book = res.rows;
+      paintBook();
+    }
+  });
+  box.querySelectorAll("input.buy").forEach(input => input.onchange = async () => {
+    const res = await pywebview.api.ledger_buy(input.dataset.id, input.value);
     if (res && res.ok !== false && res.rows) {
       state.book = res.rows;
       paintBook();
@@ -1285,7 +1375,7 @@ function build() {
   const bookView = document.createElement("div");
   bookView.className = "view";
   bookView.id = "v-book";
-  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>Купил на выкупе — строка здесь и в учёт.xlsx. Дата и предмет не меняются. Если докупил и написал больше штук, покупка и продажа пересчитаются за штуку, 5% сразу. Сумму продажи можно поправить отдельно. Если не успел выкупить — «Убрать».</p><p id="book-file"></p></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
+  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>С выкупа строка встаёт сама. Свою позицию добавляешь сверху: правится всё, кроме даты. После 5% и плюс считаются сразу. На строке с выкупа штуки пересчитывают суммы за штуку.</p><p id="book-file"></p></div><div class="own"><input id="own-name" placeholder="Предмет"><input id="own-buy" placeholder="Куплено"><input id="own-qty" placeholder="Штук"><input id="own-sell" placeholder="Продано"><span class="cut">После 5% <b id="own-net">—</b></span><span class="cut">Плюс <b id="own-gain">—</b></span><button type="button" id="own-add" class="gold">Добавить</button></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
   main.appendChild(bookView);
   $("book-only-today").onclick = () => {
     state.picked = new Set((state.book || []).filter(row => row.today).map(row => row.id));
@@ -1298,6 +1388,19 @@ function build() {
   $("book-clear").onclick = () => {
     state.picked = new Set();
     paintBook();
+  };
+  const previewOwn = () => showCut($("own-net"), $("own-gain"), moneyOf($("own-sell").value), moneyOf($("own-buy").value) || 0);
+  ["own-buy", "own-sell"].forEach(id => $(id).oninput = previewOwn);
+  $("own-add").onclick = async () => {
+    const name = $("own-name").value.trim();
+    if (!name) return;
+    const res = await pywebview.api.ledger_hand(name, $("own-buy").value, $("own-sell").value, $("own-qty").value);
+    if (res && res.ok !== false && res.rows) {
+      state.book = res.rows;
+      ["own-name", "own-buy", "own-qty", "own-sell"].forEach(id => { $(id).value = ""; });
+      previewOwn();
+      paintBook();
+    }
   };
 }
 

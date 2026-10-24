@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 
 import stalzone_agent as agent
 
-HEADERS = ["Дата", "Предмет", "Куплено", "Штук", "Продано", "После 5%", "Плюс", "id"]
+HEADERS = ["Дата", "Предмет", "Куплено", "Штук", "Продано", "После 5%", "Плюс", "Своя", "id"]
 _LOCK = threading.Lock()
 _MONEY = {"Куплено", "Продано", "После 5%", "Плюс"}
 
@@ -52,6 +52,12 @@ def _money(sell, buy):
     return net, net - int(buy or 0)
 
 
+def _hand_flag(value):
+    if value is True or value == 1:
+        return True
+    return str(value or "").strip().lower() in {"1", "да", "true"}
+
+
 def _as_count(value):
     if value is None or str(value).strip() == "":
         return None
@@ -89,6 +95,7 @@ def _read(cells, headers):
         "sell": sell,
         "net": net,
         "gain": gain,
+        "hand": _hand_flag(_at(cells, headers, "Своя")),
         "id": str(ident).strip() if ident else "",
     }
 
@@ -105,7 +112,7 @@ def _load_locked():
     headers = _header_map(ws)
     name_at = headers.get("Предмет", 1)
     rows = []
-    dirty = "Штук" not in headers
+    dirty = "Штук" not in headers or "Своя" not in headers
     for cells in ws.iter_rows(min_row=2):
         if name_at >= len(cells) or cells[name_at].value is None or str(cells[name_at].value).strip() == "":
             continue
@@ -142,7 +149,7 @@ def _write_locked(rows):
         row["gain"] = gain
         values = [
             row["date"], row["name"], int(row["buy"] or 0), row.get("qty"),
-            row["sell"], net, gain, row["id"],
+            row["sell"], net, gain, 1 if row.get("hand") else 0, row["id"],
         ]
         for col, value in enumerate(values, start=1):
             title = HEADERS[col - 1]
@@ -154,10 +161,11 @@ def _write_locked(rows):
                     cell.number_format = "#,##0"
             if title == "Плюс" and isinstance(value, int):
                 cell.font = Font(color="1F7A4D" if value >= 0 else "A33B3B")
-    widths = (14, 42, 16, 12, 16, 16, 16, 14)
+    widths = (14, 42, 16, 12, 16, 16, 16, 10, 14)
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.column_dimensions["H"].hidden = True
+    ws.column_dimensions["I"].hidden = True
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:G{max(1, len(rows) + 1)}"
     tmp = path.with_suffix(".tmp.xlsx")
@@ -174,25 +182,28 @@ def load():
         return _load_locked()
 
 
-def add(name, buy, sell, qty=None):
+def add(name, buy, sell, qty=None, hand=False):
     title = str(name or "").strip()
     if not title:
         raise ValueError("Нет названия")
     bought = int(buy or 0)
     sold = int(sell or 0) or None
     count = None if qty in (None, "") else int(qty)
+    own = bool(hand)
     with _LOCK:
         rows = _load_locked()
         today = _today()
-        for row in rows:
-            if row["date"] == today and row["name"] == title and row["buy"] == bought:
-                return False
+        if not own:
+            for row in rows:
+                if row["date"] == today and row["name"] == title and row["buy"] == bought:
+                    return False
         rows.append({
             "date": today,
             "name": title,
             "buy": bought,
             "qty": count,
             "sell": sold,
+            "hand": own,
             "id": uuid.uuid4().hex[:12],
         })
         _write_locked(rows)
@@ -219,6 +230,34 @@ def set_sell(row_id, sell):
     _change(row_id, "sell", None if sell is None else int(sell))
 
 
+def _own(rows, ident):
+    for row in rows:
+        if row["id"] == ident:
+            if not row.get("hand"):
+                raise ValueError("Эту строку принёс выкуп")
+            return row
+    raise ValueError("Строки нет в учёте")
+
+
+def set_name(row_id, name):
+    title = str(name or "").strip()
+    if not title:
+        raise ValueError("Нет названия")
+    ident = str(row_id or "").strip()
+    with _LOCK:
+        rows = _load_locked()
+        _own(rows, ident)["name"] = title
+        _write_locked(rows)
+
+
+def set_buy(row_id, buy):
+    ident = str(row_id or "").strip()
+    with _LOCK:
+        rows = _load_locked()
+        _own(rows, ident)["buy"] = int(buy or 0)
+        _write_locked(rows)
+
+
 def set_qty(row_id, qty):
     ident = str(row_id or "").strip()
     new = None if qty is None else int(qty)
@@ -230,7 +269,7 @@ def set_qty(row_id, qty):
                 continue
             found = True
             old = row.get("qty")
-            if old and new and int(old) > 0 and new != int(old):
+            if not row.get("hand") and old and new and int(old) > 0 and new != int(old):
                 row["buy"] = int(round(int(row["buy"] or 0) * new / int(old)))
                 if row.get("sell") is not None:
                     row["sell"] = int(round(int(row["sell"]) * new / int(old)))
@@ -272,6 +311,7 @@ def snapshot():
             "sell": row["sell"],
             "net": row["net"],
             "gain": row["gain"],
+            "hand": bool(row.get("hand")),
             "today": is_today,
         })
     return {
