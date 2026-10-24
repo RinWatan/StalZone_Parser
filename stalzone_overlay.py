@@ -89,8 +89,8 @@ class HudController:
         self.settings_path = settings_path
         self.settings = load_settings(settings_path)
         self.native = native
-        self.mode = 'compact'
-        self.resume_mode = 'compact'
+        self.mode = 'full'
+        self.resume_mode = 'full'
         self.interactive = False
         self.game = None
         self.bounds = None
@@ -107,7 +107,7 @@ class HudController:
         self._applied_interactive = None
 
     def command(self, action):
-        if action not in ('toggle', 'full', 'compact', 'passive', 'close'):
+        if action not in ('toggle', 'full', 'passive', 'close'):
             return {'ok': False, 'error': 'Неизвестная команда'}
         self.commands.put(action)
         return {'ok': True}
@@ -160,7 +160,7 @@ class HudController:
             return
         x, y, width, height = rect
         left, top, _, _ = self.bounds or self.native.work_area()
-        self.settings[self.mode] = {'dx': x-left, 'dy': y-top, 'w': width, 'h': height}
+        self.settings['full'] = {'dx': x-left, 'dy': y-top, 'w': width, 'h': height}
         try:
             self.settings_path.write_text(json.dumps(self.settings, ensure_ascii=False), encoding='utf-8')
         except OSError:
@@ -188,6 +188,8 @@ class HudController:
         if self._initial:
             if not self.bounds:
                 self.interactive = True
+                self.mode = 'full'
+                self.resume_mode = 'full'
                 activate = True
             self._initial = False
         while True:
@@ -201,31 +203,31 @@ class HudController:
                 self.window.destroy()
                 return
             if action == 'toggle':
-                action = 'passive' if self.interactive else self.resume_mode
+                action = 'passive' if self.interactive else 'full'
             if action == 'passive':
                 activate = False
-                self._change('compact', False)
+                self._change('full', False)
                 if self.native.owns(self.native.foreground()):
                     self.native.return_to(self.game)
             else:
-                self.resume_mode = action
-                self._change(action, True)
+                # full only — ignore any other mode name
+                self._change('full', True)
                 activate = True
         fg = self.native.foreground()
         own = self.native.owns(fg)
         in_game = bool(self.bounds and fg == self.game)
         if self.interactive and not (own or in_game or activate):
-            self._change('compact', False)
+            self._change('full', False)
         visible = bool(in_game or (self.interactive and (own or activate)))
         bounds = self.bounds or self.native.work_area()
         key = (self.mode, bounds)
         if key != self._layout_key:
-            saved = dict(self.settings.get(self.mode) or {})
+            saved = dict(self.settings.get('full') or self.settings.get(self.mode) or {})
             for source, target, start in [('dx','x',bounds[0]), ('dy','y',bounds[1])]:
                 if type(saved.get(source)) is int:
                     saved[target] = start + saved[source]
-            default = (520, 380) if self.mode == 'compact' else (1280, 820)
-            minimum = (440, 340) if self.mode == 'compact' else (960, 640)
+            default = (1280, 820)
+            minimum = (960, 640)
             self.native.place(*fit_geometry(saved, bounds, default, minimum))
             self._layout_key = key
         if self._applied_interactive != self.interactive:

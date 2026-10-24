@@ -948,27 +948,8 @@ PAGE = r"""<!DOCTYPE html>
     margin-left: auto; color: var(--dim); font-size: 12px;
     max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  #full { display: none; flex: 1; min-height: 0; }
-  body.full #full { display: flex; }
-  body.full #compact, body.full .compact-brand { display: none; }
-  #compact {
-    display: flex; flex: 1; min-height: 0; flex-direction: column;
-    padding: 0 12px 10px; gap: 8px;
-  }
-  #compact .sheet {
-    flex: 1; min-height: 0;
-    border: 1px solid #273037; border-radius: 11px;
-    background: rgba(18,24,28,.62);
-    box-shadow: 0 3px 10px #0003;
-    overflow: auto;
-  }
-  #compact th, #compact td { padding: 8px 10px; font-size: 12px; }
-  #compact td:first-child { white-space: normal; }
-  #compact td:nth-child(3), #compact td:nth-child(4) {
-    color: var(--green-bright); font-weight: 600;
-  }
-  .compact-actions { display: flex; gap: 8px; }
-  .compact-brand { display: flex; align-items: center; gap: 9px; }
+  #full { display: flex; flex: 1; min-height: 0; }
+  .header-brand { display: flex; align-items: center; gap: 9px; }
   .logo {
     width: 32px; height: 32px; border-radius: 0;
     display: grid; place-items: center;
@@ -1228,21 +1209,11 @@ PAGE = r"""<!DOCTYPE html>
 <body class="full" data-screen="buys">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
 <header class="pywebview-drag-region">
-  <div class="compact-brand"><span class="logo">S</span><h1>STALZONE</h1></div>
+  <div class="header-brand"><span class="logo">S</span><h1>STALZONE</h1></div>
   <div id="status" role="status">ожидание</div>
-  <button id="expand" title="Свернуть интерфейс">Свернуть</button>
   <button id="backgame" title="Вернуть управление игре (Esc)">В игру</button>
   <button id="closehud" aria-label="Закрыть оверлей">×</button>
 </header>
-<div id="compact">
-  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th><th>В час</th></tr></thead><tbody id="deals"></tbody></table></div>
-  <div class="compact-actions">
-    <button class="gold" id="quickrun">Прогон</button>
-    <button id="orderswitch" data-order type="button">По часу</button>
-    <button class="stop" id="quickstop" disabled>Стоп</button>
-    <button id="quickmap">Карта</button>
-  </div>
-</div>
 <div id="full">
   <aside class="sidenav">
     <div class="brand"><span class="logo">S</span><div><b>STALZONE</b><small>Аукцион</small></div></div>
@@ -2397,27 +2368,17 @@ async function tick() {
   $("log").scrollTop = $("log").scrollHeight;
   ["run","auto","live","mins","budget"].forEach(id => $(id).disabled = !!data.busy);
   $("stop").disabled = !data.busy;
-  $("quickrun").disabled = !!data.busy;
-  $("quickstop").disabled = !data.busy;
   const hud = data.hud || {};
-  const full = hud.mode === "full";
-  const changed = document.body.classList.contains("full") !== full;
-  document.body.classList.toggle("full", full);
-  $("expand").textContent = full ? "Свернуть" : "Развернуть";
+  document.body.classList.add("full");
   $("hudhint").textContent = !hud.hotkey ? "Горячая клавиша занята другой копией — закройте её и перезапустите оверлей" :
     (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
     (hud.game ? "" : " · окно игры не найдено");
-  $("deals").innerHTML = compactRows(data.compact);
-  $("deals").querySelectorAll("tr").forEach(tr => {
-    const name = tr.cells[0] ? tr.cells[0].textContent : "";
-    if (name && tr.cells.length > 1) tr.onclick = () => pywebview.api.game_search(name);
-  });
-  if (changed && full && state.wiki) setTimeout(() => state.wiki.invalidateSize(), 100);
   if (data.rev !== state.rev) {
     state.rev = data.rev;
     state.tables = data.tables || {};
     TAB_ORDER.forEach(paint);
   }
+  if (state.wiki) setTimeout(() => { try { state.wiki.invalidateSize(); } catch (e) {} }, 100);
 }
 
 window.addEventListener("pywebviewready", async () => {
@@ -2430,12 +2391,8 @@ window.addEventListener("pywebviewready", async () => {
   state.catKeys = await pywebview.api.cat_keys();
   await loadBook();
   wire();
-  $("expand").onclick = () => pywebview.api.hud_action(document.body.classList.contains("full") ? "compact" : "full");
   $("backgame").onclick = () => pywebview.api.hud_action("passive");
   $("closehud").onclick = () => pywebview.api.hud_action("close");
-  $("quickmap").onclick = async () => { await pywebview.api.hud_action("full"); await tick(); show("map"); };
-  $("quickrun").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, "Выкуп");
-  $("quickstop").onclick = () => pywebview.api.stop_run();
   document.querySelectorAll("[data-order]").forEach(b => b.onclick = () => setOrder(state.order === "hour" ? "gain" : "hour"));
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape" || $("ask").classList.contains("on")) return;
