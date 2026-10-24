@@ -1225,12 +1225,12 @@ PAGE = r"""<!DOCTYPE html>
   .bar #stop { min-width: 90px; }
 
 </head>
-<body data-screen="buys">
+<body class="full" data-screen="buys">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
 <header class="pywebview-drag-region">
   <div class="compact-brand"><span class="logo">S</span><h1>STALZONE</h1></div>
   <div id="status" role="status">ожидание</div>
-  <button id="expand" title="Развернуть интерфейс">Развернуть</button>
+  <button id="expand" title="Свернуть интерфейс">Свернуть</button>
   <button id="backgame" title="Вернуть управление игре (Esc)">В игру</button>
   <button id="closehud" aria-label="Закрыть оверлей">×</button>
 </header>
@@ -2468,7 +2468,7 @@ def main():
     bridge = Bridge()
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
     window = webview.create_window("STALZONE — карта и оверлей", html=PAGE, js_api=bridge,
-        width=520, height=380, min_size=(440, 340), frameless=True,
+        width=1280, height=820, min_size=(960, 640), frameless=True,
         easy_drag=False, on_top=True, hidden=True, background_color='#12100e')
     hud = HudController(window, folder / 'overlay_settings.json')
     bridge._hud = hud
