@@ -1205,6 +1205,7 @@ PAGE = r"""<!DOCTYPE html>
   .bar #run { min-width: 110px; }
   .bar #stop { min-width: 90px; }
 
+</style>
 </head>
 <body class="full" data-screen="buys">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
