@@ -914,7 +914,7 @@ PAGE = r"""<!DOCTYPE html>
     padding: 8px 12px;
     background: #10161a;
     color: #e9eaeb;
-    transition: background .15s ease, border-color .15s ease, color .15s ease;
+    transition: background .15s ease, border-color .15s ease, filter .15s ease;
   }
   button:hover { background: #172126; }
   button:disabled { opacity: .45; cursor: default; }
@@ -925,12 +925,13 @@ PAGE = r"""<!DOCTYPE html>
     font-weight: 600;
     box-shadow: inset 0 1px #75cc7470;
   }
-  button.gold:hover { filter: brightness(1.08); }
+  button.gold:hover { filter: brightness(1.08); background: linear-gradient(#349a3f, #267d32); }
   button.stop {
     border: 1px solid #a7292d;
     background: linear-gradient(#c52a31, #a91f25);
     color: #f3f3f3;
   }
+  button.stop:hover { filter: brightness(1.06); }
   body { display: flex; flex-direction: column; }
   header {
     display: flex; gap: 10px; align-items: center;
@@ -983,7 +984,6 @@ PAGE = r"""<!DOCTYPE html>
     outline: 2px solid var(--green); outline-offset: 1px;
   }
 
-  /* Full layout */
   .sidenav {
     width: 220px; flex-shrink: 0;
     border-right: 1px solid #242d32;
@@ -1004,10 +1004,11 @@ PAGE = r"""<!DOCTYPE html>
   .bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     padding: 12px 18px; border-bottom: 1px solid var(--line);
-    background: rgba(12,18,22,.6);
+    background: rgba(12,18,22,.75);
+    box-shadow: 0 2px 10px #0005;
   }
   .bar span { color: var(--dim); font-size: 13px; }
-  #q, #mins, #budget, #mapq {
+  #q, #mins, #budget, #mapq, input, select {
     background: #10161a; border: 1px solid #313b42; border-radius: 8px;
     padding: 7px 10px; color: var(--ink-strong);
   }
@@ -1113,7 +1114,6 @@ PAGE = r"""<!DOCTYPE html>
     background: linear-gradient(90deg, rgba(47,84,51,.22), rgba(20,29,33,.35));
   }
   td { color: #d8dddf; font-size: 13px; }
-  .buy, .q0, .q3 { }
   tr.buy td:first-child, .buy { color: var(--green-bright); }
   tr.q0 td:first-child { color: #e05a54; }
   tr.q3 td:first-child { color: #a879e2; }
@@ -1147,7 +1147,6 @@ PAGE = r"""<!DOCTYPE html>
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
-  /* Auction */
   .auc {
     flex: 1; min-height: 0;
     display: grid;
@@ -1204,30 +1203,27 @@ PAGE = r"""<!DOCTYPE html>
     gap: 8px; margin-bottom: 12px;
   }
   .sub { display: flex; gap: 6px; margin-bottom: 10px; }
-  .sub button.on {
-    border-color: #4ebf48; color: #61d55a;
-  }
+  .sub button.on { border-color: #4ebf48; color: #61d55a; }
   .detail .sheet { margin-top: 8px; }
   .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 
-  /* Map */
   .mapwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
-  #mapbar button.on, #maplayers button.on {
-    border-color: #4ebf48; color: #61d55a;
-  }
+  #mapbar button.on, #maplayers button.on { border-color: #4ebf48; color: #61d55a; }
   #mapq { width: 180px; text-align: left; }
   #wikimap {
     flex: 1; min-height: 0; background: #0e0c0a;
     border: 1px solid #273037; border-radius: 11px;
   }
 
-  /* Checkbox / buy row accents */
   input[type="checkbox"] { accent-color: var(--green); }
-
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: #3e4b4f; border-radius: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-</style>
+
+  /* Figma top-bar action group look inside .bar */
+  .bar #run { min-width: 110px; }
+  .bar #stop { min-width: 90px; }
+
 </head>
 <body data-screen="buys">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
