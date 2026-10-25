@@ -1079,7 +1079,11 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox input.qty { width: 56px; text-align: right; }
   #bookbox input.sell { width: 108px; text-align: right; }
   #bookbox input.buy, #bookbox input.name { width: 100%; min-width: 0; box-sizing: border-box; }
-  #bookbox button.ingame, #bookbox button.drop { padding: 4px 8px; white-space: nowrap; }
+  #bookbox button.ingame { padding: 4px 8px; white-space: nowrap; }
+  #bookbox button.drop, #ask-yes {
+    border: 1px solid #a7292d; border-radius: 8px; padding: 6px 12px; white-space: nowrap;
+    background: linear-gradient(#c52a31, #a91f25); color: #f7f7f7;
+  }
   #ask-no, #ask-yes { border-radius: 8px; padding: 8px 14px; }
   #ask-no { border: 1px solid #313b42; background: #10161a; color: #e9eaeb; }
   #bookbox tr[class*="tone-"] td { border-top: 0; border-left: 0; border-right: 0; border-bottom: 1px solid #242e33; }
