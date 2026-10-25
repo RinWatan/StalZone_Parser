@@ -41,27 +41,22 @@ class OverlayTests(unittest.TestCase):
     def action(self, action):
         self.hud.command(action)
         self.hud.tick()
-    def test_starts_compact_passive_over_game(self):
-        self.assertEqual(self.hud.snapshot()['mode'], 'compact')
-        self.assertFalse(self.native.interactive)
-        self.assertTrue(self.native.visible)
-    def test_expand_and_return_focus_to_game(self):
-        self.action('toggle')
-        self.action('full')
+    def test_starts_full_over_game(self):
         self.assertEqual(self.hud.snapshot()['mode'], 'full')
         self.assertTrue(self.native.interactive)
-        self.action('passive')
-        self.assertEqual(self.hud.snapshot()['mode'], 'compact')
-        self.assertEqual(self.native.fg, 123)
-        self.assertFalse(self.native.interactive)
+        self.assertTrue(self.native.visible)
+    def test_hotkey_gives_clicks_back_without_shrinking(self):
         self.action('toggle')
         self.assertEqual(self.hud.snapshot()['mode'], 'full')
-    def test_explicit_collapse_changes_remembered_mode(self):
-        self.action('full')
-        self.action('compact')
-        self.action('passive')
+        self.assertFalse(self.native.interactive)
+        self.assertEqual(self.native.fg, 123)
         self.action('toggle')
-        self.assertEqual(self.hud.snapshot()['mode'], 'compact')
+        self.assertEqual(self.hud.snapshot()['mode'], 'full')
+        self.assertTrue(self.native.interactive)
+    def test_collapse_command_stays_full(self):
+        self.action('compact')
+        self.assertEqual(self.hud.snapshot()['mode'], 'full')
+        self.assertTrue(self.native.interactive)
     def test_alt_tab_does_not_forget_full_mode(self):
         self.action('full')
         self.native.fg = 789
@@ -76,13 +71,12 @@ class OverlayTests(unittest.TestCase):
         self.hud.tick()
         self.assertEqual(self.native.fg, 123)
         self.assertFalse(self.native.interactive)
-    def test_alt_tab_hides_and_collapses(self):
-        self.action('full')
+    def test_alt_tab_hides_without_shrinking(self):
         self.native.fg = 789
         self.hud.tick()
         self.assertFalse(self.native.visible)
-        self.assertFalse(self.native.interactive)
-        self.assertEqual(self.hud.snapshot()['mode'], 'compact')
+        self.assertTrue(self.native.interactive)
+        self.assertEqual(self.hud.snapshot()['mode'], 'full')
         self.native.fg = 123
         self.hud.tick()
         self.assertTrue(self.native.visible)
@@ -110,7 +104,7 @@ class OverlayTests(unittest.TestCase):
         hud.tick()
         self.assertTrue(native.visible)
         self.assertTrue(native.interactive)
-        self.assertEqual(hud.snapshot()['mode'], 'compact')
+        self.assertEqual(hud.snapshot()['mode'], 'full')
     def test_window_follows_game_without_resetting_drag(self):
         self.native.rect = (100, 120, 520, 380)
         self.hud.tick()
@@ -119,9 +113,10 @@ class OverlayTests(unittest.TestCase):
         self.hud.tick()
         self.assertEqual(self.native.rect[:2], (400, 320))
     def test_position_saved_relative_to_game(self):
-        self.native.rect = (100, 120, 520, 380)
-        self.action('full')
-        self.assertEqual(load_settings(self.path)['compact']['dx'], 100)
+        self.native.rect = (100, 120, 1280, 820)
+        self.native.bounds = (0, 0, 1900, 1000)
+        self.hud.tick()
+        self.assertEqual(load_settings(self.path)['full']['dx'], 100)
     def test_close_destroys_window(self):
         self.action('close')
         self.assertTrue(self.window.closed)
@@ -134,7 +129,7 @@ class OverlayTests(unittest.TestCase):
     def test_native_close_saves_latest_drag(self):
         self.native.rect = (150, 160, 520, 380)
         self.hud.closing()
-        self.assertEqual(load_settings(self.path)['compact']['dx'], 150)
+        self.assertEqual(load_settings(self.path)['full']['dx'], 150)
         self.assertTrue(self.hud.stopped.is_set())
     def test_invalid_geometry_is_clamped(self):
         self.assertEqual(fit_geometry({'x':9000,'y':-9000,'w':3000,'h':2000},

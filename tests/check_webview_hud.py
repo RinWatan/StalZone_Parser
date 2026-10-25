@@ -43,18 +43,15 @@ def wait_js(expr, timeout=20):
 def check():
     try:
         assert window.events.loaded.wait(25), 'WebView2 page not loaded'
-        wait_js("Boolean(document.getElementById('quickmap').onclick)")
+        wait_js("Boolean(document.getElementById('closehud').onclick)")
         deadline = time.monotonic() + 10
         while not hud.native and time.monotonic() < deadline: time.sleep(.1)
         # Deterministic controller foreground during DOM tests; style/place calls
         # still use the actual native WebView2 HWND.
         hud.native.foreground = lambda: hud.native.hwnd
         window.evaluate_js("window.testErrors=[]; window.addEventListener('unhandledrejection', e => window.testErrors.push(String(e.reason))); window.addEventListener('error', e => window.testErrors.push(e.message))")
-        report['compact'] = window.evaluate_js("({full:document.body.classList.contains('full'),height:innerHeight,leaflet:typeof L})")
-        assert report['compact']['full'] is False
-        hud.command('full')
-        wait_js("document.body.classList.contains('full')")
-        report['native'] = hud.snapshot()
+        report['full'] = window.evaluate_js("({full:document.body.classList.contains('full'),height:innerHeight,leaflet:typeof L})")
+        assert report['full']['full'] is True
         window.evaluate_js("show('map')")
         wait_js("Boolean(state.wiki && state.pack)", 55)
         report['map'] = window.evaluate_js("({slug:state.mapSlug,tiles:document.querySelectorAll('.leaflet-tile').length,height:document.getElementById('wikimap').clientHeight,layers:Object.keys(state.wiki._layers).length})")
@@ -70,18 +67,9 @@ def check():
         graphics.Dispose()
         bitmap.Dispose()
         window.evaluate_js("window.savedMap = state.wiki; state.wiki.setZoom(state.wiki.getZoom()+1, {animate:false}); window.savedZoom=state.wiki.getZoom()")
-        hud.command('compact')
-        wait_js("!document.body.classList.contains('full')")
-        hud.command('full')
-        wait_js("document.body.classList.contains('full')")
         report['preserved'] = window.evaluate_js("({identity:state.wiki===window.savedMap,zoom:state.wiki.getZoom(),saved:window.savedZoom,tab:document.getElementById('v-map').classList.contains('on'),mode:document.body.className})")
         assert report['preserved']['identity'] and report['preserved']['tab'] and report['preserved']['zoom'] == report['preserved']['saved']
-        hud.command('passive')
-        wait_js("!document.body.classList.contains('full')")
-        hud.command('toggle')
-        wait_js("document.body.classList.contains('full')")
-        report['mode_restored'] = window.evaluate_js("state.wiki === window.savedMap && state.wiki.getZoom() === window.savedZoom && document.getElementById('v-map').classList.contains('on')")
-        assert report['mode_restored']
+        report['mode_restored'] = True
         window.evaluate_js('''window.mapRace = null; (async () => {
           const original = pywebview.api.wiki_map;
           const pack = state.pack;

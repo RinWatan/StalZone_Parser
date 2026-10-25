@@ -89,8 +89,8 @@ class HudController:
         self.settings_path = settings_path
         self.settings = load_settings(settings_path)
         self.native = native
-        self.mode = 'compact'
-        self.resume_mode = 'compact'
+        self.mode = 'full'
+        self.resume_mode = 'full'
         self.interactive = False
         self.game = None
         self.bounds = None
@@ -109,6 +109,8 @@ class HudController:
     def command(self, action):
         if action not in ('toggle', 'full', 'compact', 'passive', 'close'):
             return {'ok': False, 'error': 'Неизвестная команда'}
+        if action == 'compact':
+            return {'ok': True}
         self.commands.put(action)
         return {'ok': True}
 
@@ -167,9 +169,9 @@ class HudController:
             pass
 
     def _change(self, mode, interactive):
-        if self.mode != mode:
+        if self.mode != 'full':
             self.remember()
-        self.mode, self.interactive = mode, interactive
+        self.mode, self.interactive = 'full', interactive
 
     def tick(self):
         import time
@@ -186,9 +188,8 @@ class HudController:
         self.bounds = new_bounds
         activate = False
         if self._initial:
-            if not self.bounds:
-                self.interactive = True
-                activate = True
+            self.interactive = True
+            activate = True
             self._initial = False
         while True:
             try:
@@ -201,21 +202,19 @@ class HudController:
                 self.window.destroy()
                 return
             if action == 'toggle':
-                action = 'passive' if self.interactive else self.resume_mode
+                action = 'passive' if self.interactive and self.visible else 'full'
             if action == 'passive':
                 activate = False
-                self._change('compact', False)
+                self._change('full', False)
                 if self.native.owns(self.native.foreground()):
                     self.native.return_to(self.game)
             else:
-                self.resume_mode = action
-                self._change(action, True)
+                self.resume_mode = 'full'
+                self._change('full', True)
                 activate = True
         fg = self.native.foreground()
         own = self.native.owns(fg)
         in_game = bool(self.bounds and fg == self.game)
-        if self.interactive and not (own or in_game or activate):
-            self._change('compact', False)
         visible = bool(in_game or (self.interactive and (own or activate)))
         bounds = self.bounds or self.native.work_area()
         key = (self.mode, bounds)

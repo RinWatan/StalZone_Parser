@@ -177,6 +177,7 @@ class Bridge:
         self._search_lock = threading.Lock()
         self._catalog_busy = False
         self._catalog_payload = None
+        self._log_window = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -445,6 +446,44 @@ class Bridge:
 
     def hud_action(self, action):
         return self._hud.command(action) if self._hud else {'ok': False}
+
+    def open_log(self):
+        import webview
+        current = self._log_window
+        if current is not None:
+            try:
+                current.show()
+                return {"ok": True}
+            except Exception:
+                self._log_window = None
+        window = webview.create_window(
+            "STALZONE — лог",
+            html=LOG_PAGE,
+            js_api=self,
+            width=720,
+            height=560,
+            min_size=(480, 360),
+            frameless=True,
+            easy_drag=False,
+            on_top=True,
+            background_color="#080d11",
+        )
+        self._log_window = window
+        def forget():
+            if self._log_window is window:
+                self._log_window = None
+        window.events.closed += forget
+        return {"ok": True}
+
+    def close_log(self):
+        current = self._log_window
+        self._log_window = None
+        if current is not None:
+            try:
+                current.destroy()
+            except Exception:
+                pass
+        return {"ok": True}
 
     def boot(self):
         saved = "5000000"
@@ -866,6 +905,57 @@ class Bridge:
                 "stats": stats, "summary": summary}
 
 
+LOG_PAGE = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<title>STALZONE — лог</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #080d11; color: #d6d8da; font: 14px/1.45 "Segoe UI", Arial, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid #263039; background: rgba(12,18,22,.95); }
+  .mark { width: 34px; height: 34px; display: grid; place-items: center; color: #09100b; background: linear-gradient(135deg,#66db58,#38aa35); font-size: 22px; }
+  strong { color: #55cf4d; font-size: 18px; }
+  em { color: #b4b7ba; font-style: normal; font-size: 16px; }
+  .state { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #aeb2b5; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #55cf4d; }
+  button { width: 36px; height: 36px; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; cursor: pointer; }
+  main { flex: 1; min-height: 0; margin: 14px; overflow: auto; border: 1px solid #273037; border-radius: 11px; background: rgba(18,24,28,.62); padding: 10px 16px; }
+  p { margin: 0; line-height: 26px; color: #b8bdc0; }
+  mark { color: #5ed257; background: none; }
+</style>
+</head>
+<body>
+<header class="pywebview-drag-region">
+  <span class="mark">☢</span>
+  <strong>STALZONE</strong>
+  <em>Лог</em>
+  <span class="state"><i class="dot"></i> <span id="state">Онлайн</span></span>
+  <button id="close" type="button" aria-label="Закрыть">×</button>
+</header>
+<main id="lines"></main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&','<':'<','>':'>','"':'"'}[c]));
+async function paint() {
+  const data = await pywebview.api.poll();
+  document.getElementById("state").textContent = data.busy ? "В работе" : "Онлайн";
+  const lines = data.logs || [];
+  const box = document.getElementById("lines");
+  const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = lines.map(line => `<p>${esc(line).replace(/OK/g, "<mark>OK</mark>")}</p>`).join("") || "<p><mark>Ожидание следующего прогона...</mark></p>";
+  if (nearEnd) box.scrollTop = box.scrollHeight;
+}
+window.addEventListener("pywebviewready", () => {
+  document.getElementById("close").onclick = () => pywebview.api.close_log();
+  paint();
+  setInterval(paint, 400);
+});
+</script>
+</body>
+</html>
+"""
+
 PAGE = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -903,9 +993,7 @@ PAGE = r"""<!DOCTYPE html>
   header.compact-head h1 { margin: 0; font-size: 15px; letter-spacing: 0.08em; color: var(--green); }
   header.compact-head button { padding: 5px 9px; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; }
   #compact-status { margin-left: auto; color: var(--dim); font-size: 12px; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #full { display: none; }
-  body.full #full { display: grid; }
-  body.full #compact, body.full .compact-head { display: none; }
+  #full { display: grid; flex: 1; min-height: 0; height: 100%; }
   #compact { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0 12px 10px; gap: 8px; }
   #compact .sheet { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
   #compact th, #compact td { padding: 8px; font-size: 12px; }
@@ -943,8 +1031,8 @@ PAGE = r"""<!DOCTYPE html>
   .mode-btn { border: 0; background: transparent; padding: 0; color: #e1e2e3; }
   .settings input { width: 64px; padding: 0; border: 0; background: transparent; color: #e1e2e3; text-align: left; }
   .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px #4fc64a44; }
-  .hud-actions { display: flex; gap: 6px; flex: 0 0 auto; padding-right: 8px; }
-  .hud-actions button { height: 32px; padding: 0 7px; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #b9bdc1; font-size: 12px; }
+  .hud-actions { display: flex; gap: 6px; flex: 0 0 auto; padding-right: 12px; }
+  .hud-actions button { width: 36px; height: 36px; padding: 0; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; line-height: 1; }
   .sidebar { width: 220px; border-right: 1px solid #242d32; padding: 12px 10px 18px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; opacity: 0; transform: translateX(-100%); visibility: hidden; transition: transform .32s cubic-bezier(.22,.8,.3,1), opacity .22s ease, visibility 0s linear .32s; }
   .menu-open .sidebar { opacity: 1; transform: none; visibility: visible; transition-delay: 0s; }
   .tabs { display: flex; flex-direction: column; gap: 2px; overflow: auto; }
@@ -1083,24 +1171,8 @@ PAGE = r"""<!DOCTYPE html>
   }
 </style>
 </head>
-<body data-screen="buys">
+<body data-screen="buys" class="full">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
-<header class="compact-head">
-  <div class="compact-brand"><span class="logo">☢</span><h1>STALZONE</h1></div>
-  <div id="compact-status" role="status">ожидание</div>
-  <button class="act-expand" id="expand" title="Развернуть интерфейс">Развернуть</button>
-  <button class="act-back" id="backgame" title="Вернуть управление игре (Esc)">В игру</button>
-  <button class="act-close" id="closehud" aria-label="Закрыть оверлей">×</button>
-</header>
-<div id="compact">
-  <div class="sheet"><table><thead><tr><th>Предмет</th><th>Купить и продать</th><th>Плюс</th><th>В час</th></tr></thead><tbody id="deals"></tbody></table></div>
-  <div class="compact-actions">
-    <button class="gold" id="quickrun">Прогон</button>
-    <button id="orderswitch" data-order type="button">По часу</button>
-    <button class="stop" id="quickstop" disabled>Стоп</button>
-    <button id="quickmap">Карта</button>
-  </div>
-</div>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
     <div class="brand">
@@ -1120,9 +1192,7 @@ PAGE = r"""<!DOCTYPE html>
       <div class="setting"><small>Режим</small><button class="mode-btn" id="orderswitch2" data-order type="button">По часу</button></div>
     </div>
     <div class="hud-actions">
-      <button class="act-expand" type="button">Свернуть</button>
-      <button class="act-back" type="button">В игру</button>
-      <button class="act-close" type="button" aria-label="Закрыть оверлей">×</button>
+      <button class="act-close" id="closehud" type="button" aria-label="Закрыть">×</button>
     </div>
   </header>
   <aside class="sidebar">
@@ -1142,13 +1212,8 @@ PAGE = r"""<!DOCTYPE html>
       <article class="stat yellow"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><div><span>Рынок ждёт</span><b id="stat-live">ждёт</b></div></article>
     </section>
     <div id="main"></div>
-    <section class="log">
-      <div class="log-title"><b>Лог</b><span><i class="dot"></i> <em id="log-state">Онлайн</em></span></div>
-      <div class="log-lines" id="log"></div>
-    </section>
   </div>
 </div>
-<div id="hudhint">F10 — управление оверлеем</div>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_BLURB = {
@@ -1163,7 +1228,7 @@ const TAB_BLURB = {
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
 const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}};
-const TAB_ICON = {buys:"cart", book:"clipboard", farm:"sprout", arsenal:"shield", shelter_buy:"home", shelter_sell:"home", consumables:"capsule", arts:"diamond", protos:"flask", auc:"gavel", map:"pin"};
+const TAB_ICON = {buys:"cart", book:"clipboard", farm:"sprout", arsenal:"shield", shelter_buy:"home", shelter_sell:"home", consumables:"capsule", arts:"diamond", protos:"flask", auc:"gavel", map:"pin", log:"log"};
 const $ = (id) => document.getElementById(id);
 const ICONS = {
   cart: '<circle cx="9" cy="20" r="1"/><circle cx="19" cy="20" r="1"/><path d="M3 4h3l2.4 11.5a2 2 0 0 0 2 1.5h7.7a2 2 0 0 0 2-1.6L22 8H7"/>',
@@ -1176,6 +1241,7 @@ const ICONS = {
   flask: '<path d="M9 3h6M10 3v6l-5 10a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3L14 9V3"/>',
   gavel: '<path d="m14 5 5 5M12 7l5 5M5 20l7-7M3 21h10"/>',
   pin: '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+  log: '<path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
   target: '<circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="9"/><path d="M12 3v4m0 10v4M3 12h4m10 0h4"/>'
 };
 function icon(name) {
@@ -1537,6 +1603,9 @@ function build() {
     </div>`;
   main.appendChild(view);
   tabs.appendChild(tabButton("map", "Карта", false));
+  const logBtn = tabButton("log", "Лог", false);
+  logBtn.onclick = () => pywebview.api.open_log();
+  tabs.appendChild(logBtn);
   const mapView = document.createElement("div");
   mapView.className = "view";
   mapView.id = "v-map";
@@ -2270,11 +2339,6 @@ async function tick() {
   const short = data.busy ? "В работе" : "Онлайн";
   $("status").textContent = short;
   $("status").title = data.status || "";
-  if ($("compact-status")) {
-    $("compact-status").textContent = data.status || short;
-    $("compact-status").title = data.status || "";
-  }
-  if ($("log-state")) $("log-state").textContent = short;
   const budgetText = prettyMoney($("budget").value || "");
   if ($("stat-count")) {
     const rows = data.compact || [];
@@ -2285,28 +2349,8 @@ async function tick() {
     $("stat-live").textContent = data.busy ? "скан" : "ждёт";
   }
   if (data.catalog) applyCatalog(data.catalog);
-  const lines = data.logs || [];
-  $("log").innerHTML = lines.slice(-8).map(line => `<p>${esc(line).replace(/OK/g, "<mark>OK</mark>")}</p>`).join("")
-    || `<p><mark>${data.busy ? "Прогон запущен, поиск лотов..." : "Ожидание следующего прогона..."}</mark></p>`;
-  $("log").scrollTop = $("log").scrollHeight;
   ["run","auto","live","mins","budget"].forEach(id => $(id).disabled = !!data.busy);
   $("stop").disabled = !data.busy;
-  $("quickrun").disabled = !!data.busy;
-  $("quickstop").disabled = !data.busy;
-  const hud = data.hud || {};
-  const full = hud.mode === "full";
-  const changed = document.body.classList.contains("full") !== full;
-  document.body.classList.toggle("full", full);
-  document.querySelectorAll(".act-expand").forEach(b => b.textContent = full ? "Свернуть" : "Развернуть");
-  $("hudhint").textContent = !hud.hotkey ? "Горячая клавиша занята другой копией — закройте её и перезапустите оверлей" :
-    (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
-    (hud.game ? "" : " · окно игры не найдено");
-  $("deals").innerHTML = compactRows(data.compact);
-  $("deals").querySelectorAll("tr").forEach(tr => {
-    const name = tr.cells[0] ? tr.cells[0].textContent : "";
-    if (name && tr.cells.length > 1) tr.onclick = () => pywebview.api.game_search(name);
-  });
-  if (changed && full && state.wiki) setTimeout(() => state.wiki.invalidateSize(), 100);
   if (data.rev !== state.rev) {
     state.rev = data.rev;
     state.tables = data.tables || {};
@@ -2324,23 +2368,14 @@ window.addEventListener("pywebviewready", async () => {
   state.catKeys = await pywebview.api.cat_keys();
   await loadBook();
   wire();
-  document.querySelectorAll(".act-expand").forEach(b => b.onclick = () => pywebview.api.hud_action(document.body.classList.contains("full") ? "compact" : "full"));
-  document.querySelectorAll(".act-back").forEach(b => b.onclick = () => pywebview.api.hud_action("passive"));
-  document.querySelectorAll(".act-close").forEach(b => b.onclick = () => pywebview.api.hud_action("close"));
+  $("closehud").onclick = () => pywebview.api.hud_action("close");
   $("menu-toggle").onclick = () => {
     const shell = $("full");
     const open = shell.classList.toggle("menu-open");
     $("menu-toggle").setAttribute("aria-label", open ? "Закрыть меню" : "Открыть меню");
   };
-  $("quickmap").onclick = async () => { await pywebview.api.hud_action("full"); await tick(); show("map"); };
-  $("quickrun").onclick = () => pywebview.api.start_run(false, $("mins").value, $("budget").value, "Выкуп");
-  $("quickstop").onclick = () => pywebview.api.stop_run();
+  $("quickstop") && ($("quickstop").onclick = () => pywebview.api.stop_run());
   document.querySelectorAll("[data-order]").forEach(b => b.onclick = () => setOrder(state.order === "hour" ? "gain" : "hour"));
-  document.addEventListener("keydown", e => {
-    if (e.key !== "Escape" || $("ask").classList.contains("on")) return;
-    e.preventDefault();
-    pywebview.api.hud_action("passive");
-  });
   TAB_ORDER.forEach(paint);
   setInterval(tick, 400);
   tick();
@@ -2367,13 +2402,14 @@ def main():
     bridge = Bridge()
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
     window = webview.create_window("STALZONE — карта и оверлей", html=PAGE, js_api=bridge,
-        width=520, height=380, min_size=(440, 340), frameless=True,
-        easy_drag=False, on_top=True, hidden=True, background_color='#12100e')
+        width=1280, height=820, min_size=(960, 640), frameless=True,
+        easy_drag=False, on_top=True, hidden=True, background_color='#080d11')
     hud = HudController(window, folder / 'overlay_settings.json')
     bridge._hud = hud
     window.events.loaded += hud.start
     def closing():
         agent.HALT.set()
+        bridge.close_log()
         hud.closing()
     window.events.closing += closing
     window.events.closed += hud.stop
