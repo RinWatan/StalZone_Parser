@@ -877,8 +877,27 @@ class Bridge:
         except Exception:
             stats = None
             summary = "Статистика недоступна: не удалось загрузить историю"
+        best = min((r for r in lots if r.get("buyout")), key=lambda r: r["unit"] or r["buyout"], default=None)
+        mean = int(stats["mean"]) if stats and stats.get("count") else 0
+        delta = ""
+        if best and mean and best.get("unit"):
+            delta = f"{round((best['unit'] - mean) / mean * 100):+d}% от средней"
+        card = {
+            "price": int(best["buyout"]) if best else 0,
+            "unit": int(best["unit"]) if best else 0,
+            "text": money(best["buyout"]) if best else "—",
+            "left": best["left"] if best else "—",
+            "qname": best["qname"] if best else "",
+            "ptn": f"+{best['ptn']}" if best and best["qlt"] is not None else "",
+            "amount": int(best["amount"]) if best else 0,
+            "count": int(stats["count"]) if stats else 0,
+            "mean": mean,
+            "mean_text": money(mean) if mean else "—",
+            "delta": delta,
+            "verdict": data.get("verdict") or "",
+        }
         return {"ok": True, "info": info, "lots": lot_rows, "sales": sale_rows,
-                "stats": stats, "summary": summary}
+                "stats": stats, "summary": summary, "card": card}
 
 
 PAGE = r"""<!DOCTYPE html>
@@ -1085,25 +1104,70 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox tr[class*="tone-"] td { border-top: 0; border-left: 0; border-right: 0; border-bottom: 1px solid #242e33; }
   #bookbox tr[class*="tone-"] td:first-child { box-shadow: inset 4px 0 0 var(--frame); }
   button.ingame { height: auto; padding: 6px 10px; }
-  .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
-  .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
-  .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-  .detail { border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
-  .filters h3, .detail h2 { margin: 4px 0; display: flex; align-items: center; gap: 8px; }
-  .filters label { color: var(--dim); font-size: 12px; }
+  body[data-screen="auc"] #screen-title, body[data-screen="auc"] .rule { display: none; }
+  #v-auc { min-height: 0; }
+  .auc-page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .auc-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+  .auc-intro small { color: #35e95a; font: 700 11px Arial, sans-serif; letter-spacing: 1.3px; }
+  .auc-intro h1 { margin: 8px 0 4px; font-size: 32px; line-height: 1; font-weight: 600; }
+  .auc-intro p { margin: 0; color: #80929e; font-size: 14px; }
+  .auc-filter-btn { height: 43px; padding: 0 15px; border: 1px solid #29343b; border-radius: 9px; background: #121a1f; color: #e9eaeb; font-weight: 700; }
+  .auc-filter-btn b { margin-left: 7px; padding: 4px 7px; border-radius: 5px; color: #48eb60; background: #0c3b1b; }
+  .auc-search { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .auc-q { display: flex; align-items: center; gap: 10px; width: min(431px, 100%); height: 46px; padding: 0 14px; color: #637580; border: 1px solid #2b353c; border-radius: 9px; background: #11191e; }
+  .auc-q input { width: 100%; border: 0; background: transparent; color: #dfe5e8; padding: 0; }
+  .auc-q kbd { padding: 4px 6px; border: 1px solid #344049; border-radius: 4px; color: #9aafba; font-size: 11px; }
+  .chip { height: 36px; padding: 0 14px; border: 1px solid #29343c; border-radius: 8px; color: #9cb0bc; background: #0c1318; }
+  .chip.on { color: #fff; border-color: #22823b; background: #123522; }
+  .auc-filterbox { display: none; grid-template-columns: 1.4fr 1fr 1fr .8fr; gap: 8px 12px; padding: 12px; border: 1px solid #2a353c; border-radius: 9px; background: #12191f; }
+  .auc-filterbox.on { display: grid; }
+  .auc-filterbox label { color: #80929e; font-size: 12px; }
+  .auc-filterbox select, .auc-filterbox input { width: 100%; }
   .range { display: flex; gap: 8px; }
-  .range input { width: 100%; }
-  .results { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; gap: 8px; }
-  .result-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
-  .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; cursor: pointer; color: inherit; }
-  .pick.on { border-color: var(--green); background: #14211b; }
-  .pick .avatar, .pick .item-gem { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 10px; }
-  .pick .item-gem img { width: 30px; height: 30px; }
-  .pick .who { display: flex; flex-direction: column; min-width: 0; }
-  .pick .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pick .who small, .found { color: var(--dim); }
-  .pick .watch { margin-left: auto; color: var(--dim); background: transparent; border: 0; font-size: 18px; }
-  .pick .watch.on { color: var(--orange); }
+  .market { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(420px, 1.7fr) minmax(300px, 1fr); gap: 14px; }
+  .catalog, .details { min-height: 0; display: flex; flex-direction: column; border: 1px solid #2a353c; border-radius: 9px; background: #12191f; }
+  .catalog { overflow: hidden; }
+  .details { overflow: auto; }
+  .catalog-head { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; border-bottom: 1px solid #2a353c; }
+  .catalog-head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .catalog-head small { color: #66808f; font-size: 12px; }
+  #asort { width: auto; border: 0; background: transparent; color: #8798a3; padding: 0; }
+  .columns { display: grid; grid-template-columns: 1fr 120px 110px; height: 34px; align-items: center; padding: 0 48px 0 18px; color: #60717c; font-size: 10px; letter-spacing: 1px; }
+  .auc-lots { flex: 1; min-height: 0; overflow: auto; }
+  .alot { display: grid; grid-template-columns: 46px minmax(0, 1fr) 110px 92px 16px; align-items: center; gap: 8px; width: calc(100% - 14px); min-height: 68px; margin: 0 7px; padding: 6px 8px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; text-align: left; }
+  .alot.on { border-color: #1f8e38; background: #0f2b1a; }
+  .alot .item-copy, .alot .price { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .alot .item-copy b, .alot .price b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .alot .item-copy small, .alot .price small, .alot .time { color: #78909d; font-size: 11px; }
+  .alot .time { white-space: nowrap; }
+  .alot .arrow { color: #46545c; font-size: 20px; }
+  .alot.on .arrow { color: #33ee59; }
+  .auc-tabs { height: 52px; display: flex; gap: 22px; align-items: end; padding: 0 16px; border-bottom: 1px solid #2a353c; }
+  .auc-tabs button { height: 52px; padding: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: #798b96; }
+  .auc-tabs button.on { color: #eef2f3; border-bottom-color: #45e560; background: transparent; }
+  .product { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 16px 14px 8px; }
+  .product .shield { width: 64px; height: 64px; display: grid; place-items: center; }
+  .product .shield .item-gem { width: 64px; height: 64px; border-radius: 15px; }
+  .product .shield .item-gem img { width: 40px; height: 40px; }
+  #detail-q { padding: 3px 8px; border: 1px solid #39434a; border-radius: 8px; color: #95a0a7; font-size: 11px; }
+  .product h2 { margin: 4px 0 0; font-size: 20px; }
+  .product p { margin: 0; color: #79919f; font-size: 12px; }
+  .current-price { margin: 8px 14px; padding: 16px 14px; border: 1px solid #2a343a; border-radius: 12px; background: #0c1216; display: flex; flex-direction: column; gap: 6px; }
+  .current-price small, .facts small { color: #77909c; font-size: 11px; }
+  .current-price strong { font-size: 26px; }
+  .current-price b { color: #30df55; font-size: 12px; font-weight: 600; }
+  .current-price b.up { color: #ef4f60; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #2a343a; border-bottom: 1px solid #2a343a; }
+  .facts div { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border-right: 1px solid #2a343a; }
+  .facts b { font-size: 14px; }
+  .offer { display: flex; flex-direction: column; gap: 4px; margin: 12px 14px 8px; padding: 11px; border: 1px solid #187533; border-radius: 8px; color: #3ae55a; background: #0e2c1a; }
+  .offer small { color: #79a786; }
+  #lotstats { color: #78909d; font-size: 12px; padding: 0 14px 8px; }
+  #v-auc .buy { display: flex; justify-content: space-between; align-items: center; height: 40px; margin: 0 14px 10px; padding: 0 13px; border: 0; border-radius: 6px; color: #07110a; background: linear-gradient(90deg, #38e85a, #42d65c); font-weight: 700; }
+  #v-auc .buy:disabled { opacity: .45; }
+  #v-auc #detail-find { height: auto; margin: 0 14px; }
+  #v-auc #lotbox { margin: 0 14px 12px; border: 0; background: transparent; }
+  #v-auc #lotbox table { font-size: 12px; }
   tr.more td { white-space: normal; color: var(--dim); }
   tr.face { cursor: pointer; }
   #lotinfo { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
@@ -1613,31 +1677,49 @@ function build() {
   view.className = "view";
   view.id = "v-auc";
   view.innerHTML = `
-    <div class="auc">
-      <aside class="filters">
-        <h3>Поиск</h3>
-        <input id="q" placeholder="Предмет или категория"/>
-        <label>Раздел</label>
-        <select id="cat"></select>
-        <label>Порядок</label>
-        <select id="asort"><option>По имени</option><option>По рангу</option></select>
-        <label>Редкость</label>
-        <select id="lq"></select>
-        <label>Заточка</label>
-        <div class="range"><input id="lo" value="0"/><input id="hi" value="15"/></div>
-      </aside>
-      <section class="results">
-        <div class="page-head"><h2>Аукцион</h2><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
-        <div id="items" class="result-list"></div>
-      </section>
-      <aside class="detail">
-        <h2 id="detail-name">Лот</h2>
-        <button type="button" class="ingame" id="detail-find">Найти на аукционе</button>
-        <div id="lotinfo">Кликни предмет слева. Здесь будет цена, медиана и почему его брать или нет.</div>
-        <div id="lotstats" title="Цена продажи делится на количество предметов. Каждая сделка имеет одинаковый вес. Учитываются выбранные редкость и заточка."></div>
-        <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
-        <div class="sheet" id="lotbox"></div>
-      </aside>
+    <div class="auc-page">
+      <div class="auc-intro">
+        <div>
+          <small>ТОРГОВАЯ ПЛОЩАДКА</small>
+          <h1>Аукцион</h1>
+          <p>Находите выгодные лоты и принимайте решение без лишнего шума.</p>
+        </div>
+        <button type="button" class="auc-filter-btn" id="filter-toggle">Фильтры <b id="filter-count">0</b></button>
+      </div>
+      <div class="auc-search">
+        <label class="auc-q">⌕ <input id="q" placeholder="Название предмета или категория"/><kbd>⌘ K</kbd></label>
+        <button type="button" class="chip on" data-chip="all">Все предметы</button>
+        <button type="button" class="chip" data-chip="rare">Редкие</button>
+        <button type="button" class="chip" data-chip="ptn">Заточка 0–15</button>
+      </div>
+      <div class="auc-filterbox" id="filterbox">
+        <div><label>Раздел</label><select id="cat"></select></div>
+        <div><label>Редкость</label><select id="lq"></select></div>
+        <div><label>Заточка</label><div class="range"><input id="lo" value="0"/><input id="hi" value="15"/></div></div>
+      </div>
+      <div class="market">
+        <section class="catalog">
+          <div class="catalog-head"><div><h2>Каталог</h2><small id="found">Каталог грузится при открытии вкладки.</small></div><select id="asort"><option>По имени</option><option>По рангу</option></select></div>
+          <div class="columns"><span>ПРЕДМЕТ</span><span>ЦЕНА</span><span>ОСТАЛОСЬ</span></div>
+          <div id="items" class="auc-lots"></div>
+        </section>
+        <aside class="details">
+          <div class="auc-tabs"><button type="button" class="on" id="now">Текущий лот</button><button type="button" id="hist">История</button></div>
+          <div class="product">
+            <span class="shield" id="detail-gem"></span>
+            <small id="detail-q">—</small>
+            <h2 id="detail-name">Выбери предмет</h2>
+            <p id="detail-kind"></p>
+            <button type="button" class="ingame" id="detail-find">Найти на аукционе</button>
+          </div>
+          <div class="current-price" id="lot-price"><small>Текущая цена</small><strong id="lot-now">—</strong><b id="lot-delta"></b></div>
+          <div class="facts" id="lot-facts"></div>
+          <div class="offer" id="lotinfo">Кликни предмет слева. Здесь будет цена и стоит ли его брать.</div>
+          <div id="lotstats"></div>
+          <button type="button" class="buy" id="auc-add" disabled>Добавить в выкуп <b id="auc-price">—</b></button>
+          <div class="sheet" id="lotbox"></div>
+        </aside>
+      </div>
     </div>`;
   main.appendChild(view);
   tabs.appendChild(tabButton("map", "Карта", false));
@@ -2249,6 +2331,53 @@ function esc(s) {
 }
 
 let selected = null;
+function paintFilterCount() {
+  const cat = $("cat");
+  const lq = $("lq");
+  const lo = Number($("lo") && $("lo").value);
+  const hi = Number($("hi") && $("hi").value);
+  let n = 0;
+  if (cat && cat.value && cat.value !== "all") n += 1;
+  if (lq && lq.value && lq.value !== "Все") n += 1;
+  if (lo !== 0 || hi !== 15) n += 1;
+  if ($("q") && $("q").value.trim()) n += 1;
+  if ($("filter-count")) $("filter-count").textContent = String(n);
+  document.querySelectorAll(".chip").forEach(btn => {
+    const kind = btn.dataset.chip;
+    const on = kind === "rare" ? !!(lq && /редк/i.test(lq.value))
+      : kind === "all" ? (!cat || cat.value === "all") && (!lq || !lq.value || lq.value === "Все")
+      : false;
+    btn.classList.toggle("on", on);
+  });
+}
+
+function paintCard(name, row) {
+  const card = state.card || {};
+  const item = row || state.catalog.find(i => i.id === selected) || {};
+  const title = name || item.name || "";
+  if ($("detail-q")) $("detail-q").textContent = card.qname || item.rank || "—";
+  if ($("lot-now")) $("lot-now").textContent = card.price ? card.text + " ₽" : "—";
+  const delta = $("lot-delta");
+  if (delta) {
+    delta.textContent = card.delta || "";
+    delta.classList.toggle("up", String(card.delta || "").trim().startsWith("+"));
+  }
+  if ($("lot-facts")) {
+    const cells = [["Качество", card.qname || "—"], ["Осталось", card.left || "—"], ["Средняя цена", card.mean ? card.mean_text + " ₽" : "—"], ["Продаж за 7 д", String(card.count || 0)]];
+    $("lot-facts").innerHTML = cells.map(([k, v]) => `<div><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join("");
+  }
+  if ($("auc-price")) $("auc-price").textContent = card.price ? card.text : "—";
+  const add = $("auc-add");
+  if (add) {
+    add.disabled = !card.price;
+    add.onclick = async () => {
+      if (!card.price) return;
+      const res = await pywebview.api.ledger_add(title, card.price, "", card.amount || "", card.qname || "", card.ptn || "");
+      if (res && res.rows) { state.book = res.rows; if ($("bookbox")) paintBook(); }
+    };
+  }
+}
+
 function renderItems() {
   const q = ($("q").value || "").trim().toLowerCase();
   const key = $("cat").value || "all";
@@ -2271,29 +2400,23 @@ function renderItems() {
   }
   if (q) items = items.filter(i => i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q));
   const shown = items.slice(0, 500);
-  $("found").textContent = `Найдено ${items.length}. Показано ${shown.length}.`;
+  const card = state.card || {};
+  $("found").textContent = `Показано ${shown.length} из ${items.length}`;
   $("items").innerHTML = shown.map(i => {
     const on = selected === i.id ? " on" : "";
-    const star = state.fav.has(i.id) ? "on" : "";
-    const mark = state.fav.has(i.id) ? "★" : "☆";
+    const mine = selected === i.id && card.text;
+    const price = mine ? card.text : "—";
+    const left = mine ? (card.left || "—") : "—";
     const face = gem(i.name, "", i.icon);
-    return `<div class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}">${face}<span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><button type="button" class="watch ${star}" title="Избранное">${mark}</button></div>`;
+    return `<button type="button" class="alot${on}" data-id="${esc(i.id)}">${face}<span class="item-copy"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><span class="price"><b>${esc(price)}</b><small>${esc(i.rank)}</small></span><span class="time">${esc(left)}</span><span class="arrow">›</span></button>`;
   }).join("");
-  $("items").querySelectorAll(".pick").forEach(tr => {
+  $("items").querySelectorAll(".alot").forEach(tr => {
     tr.onclick = () => {
       selected = tr.dataset.id;
-      $("items").querySelectorAll(".pick").forEach(row => row.classList.toggle("on", row.dataset.id === selected));
       openItem();
     };
-    const star = tr.querySelector(".watch");
-    star.onclick = async (event) => {
-      event.stopPropagation();
-      selected = tr.dataset.id;
-      const r = await pywebview.api.toggle_fav(selected);
-      state.fav = new Set(r.ids || []);
-      renderItems();
-    };
   });
+  paintFilterCount();
 }
 
 async function loadCatalog() {
@@ -2343,20 +2466,26 @@ async function openItem() {
   auctionLoading(true);
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
-  $("detail-name").innerHTML = `${gem(name, "", row && row.icon)}<span>${esc(name)}</span>`;
+  if ($("detail-gem")) $("detail-gem").innerHTML = gem(name, "", row && row.icon);
+  if ($("detail-name")) $("detail-name").textContent = name;
+  if ($("detail-kind")) $("detail-kind").textContent = row ? `${row.cat} · ${row.rank}` : "";
+  if ($("detail-q")) $("detail-q").textContent = "—";
   $("detail-find").onclick = () => pywebview.api.game_search(name);
   $("lotinfo").textContent = name + ": читаю лоты…";
   $("lotstats").textContent = "Считаю среднюю и медиану…";
+  if ($("auc-add")) $("auc-add").disabled = true;
   let data;
   try { data = await pywebview.api.open_item(selected, name, $("lq").value, $("lo").value, $("hi").value); }
   catch (error) { data = {ok:false, error:String(error)}; }
   if (request !== state.detailRequest) return;
   auctionLoading(false);
   if (!data.ok) { $("lotinfo").textContent = data.error || "Ошибка"; $("lotstats").textContent = ""; return; }
-  state.lots = data.lots; state.sales = data.sales;
-  $("lotinfo").textContent = data.info;
+  state.lots = data.lots; state.sales = data.sales; state.card = data.card || {};
+  paintCard(name, row);
+  $("lotinfo").textContent = (state.card.verdict || data.info || "").replace(/^.*?:\s*/, "");
   $("lotstats").textContent = data.summary || "";
   showLots();
+  renderItems();
 }
 
 function showLots() {
@@ -2372,6 +2501,21 @@ function wire() {
   $("q").oninput = renderItems;
   $("cat").onchange = renderItems;
   $("asort").onchange = renderItems;
+  $("filter-toggle").onclick = () => $("filterbox").classList.toggle("on");
+  document.querySelectorAll(".chip").forEach(btn => btn.onclick = () => {
+    if (btn.dataset.chip === "all") {
+      $("cat").value = "all";
+      if ([...$("lq").options].some(o => o.value === "Все")) $("lq").value = "Все";
+    } else if (btn.dataset.chip === "rare") {
+      const opt = [...$("lq").options].find(o => /редк/i.test(o.value));
+      if (opt) $("lq").value = opt.value;
+    } else {
+      $("lo").value = "0";
+      $("hi").value = "15";
+    }
+    renderItems();
+    if ($("lq").onchange) $("lq").onchange();
+  });
   $("budget").addEventListener("change", () => { $("budget").value = prettyMoney($("budget").value); });
   $("lq").onchange = $("lo").onchange = $("hi").onchange = async () => {
     if (state.itemLoading) return;
@@ -2380,10 +2524,12 @@ function wire() {
     const data = await pywebview.api.filter_open($("lq").value, $("lo").value, $("hi").value);
     if (request !== state.detailRequest) return;
     if (!data.ok) { $("lotstats").textContent = ""; return; }
-    state.lots = data.lots; state.sales = data.sales;
-    if (data.info) $("lotinfo").textContent = data.info;
+    state.lots = data.lots; state.sales = data.sales; state.card = data.card || state.card || {};
+    paintCard();
+    if (data.info) $("lotinfo").textContent = data.card && data.card.verdict ? data.card.verdict : data.info;
     $("lotstats").textContent = data.summary || "";
     showLots();
+    renderItems();
   };
   $("now").onclick = () => { state.lot = "now"; $("now").classList.add("on"); $("hist").classList.remove("on"); showLots(); };
   $("hist").onclick = () => { state.lot = "hist"; $("hist").classList.add("on"); $("now").classList.remove("on"); showLots(); };
