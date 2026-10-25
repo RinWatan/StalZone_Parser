@@ -120,6 +120,22 @@ def mark_untradable(path, item_id, reason="auction"):
             conn.close()
 
 
+def appearance(path):
+    """Иконка и редкость для квадратиков в интерфейсе."""
+    if not path.exists():
+        return []
+    with _LOCK:
+        conn = _connect(path)
+        try:
+            rows = conn.execute("SELECT id, name, color, icon FROM items").fetchall()
+            return [
+                {"id": row["id"], "name": row["name"], "color": row["color"] or "DEFAULT", "icon": icon_url(row["icon"])}
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+
 def untradable_ids(path):
     if not path.exists():
         return set()

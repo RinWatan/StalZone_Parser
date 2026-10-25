@@ -458,6 +458,7 @@ class Bridge:
             "cats": [{"key": key, "title": title} for key, title in agent.AUCTION_CATS],
             "qlt": ["Все", *agent.QLT],
             "columns": TABLES,
+            "icons": stalzone_db.appearance(agent.DIR / "items.db"),
         }
 
     def poll(self):
@@ -991,11 +992,16 @@ PAGE = r"""<!DOCTYPE html>
   .lot-name > span { display: flex; flex-direction: column; min-width: 0; }
   .lot-name strong { overflow: hidden; color: #d8dddf; font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
   .lot-name small { margin-top: 3px; color: #707b80; font-size: 10px; letter-spacing: .4px; }
-  .item-gem { width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid currentColor; border-radius: 9px 4px; }
-  .item-gem.red { color: #e05a54; background: rgba(224, 90, 84, .18); }
-  .item-gem.blue { color: #45a9e9; background: rgba(69, 169, 233, .18); }
-  .item-gem.orange { color: #df9a45; background: rgba(223, 154, 69, .18); }
-  .item-gem.violet { color: #a879e2; background: rgba(168, 121, 226, .18); }
+  .item-gem { width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid currentColor; border-radius: 8px; display: grid; place-items: center; overflow: hidden; }
+  .item-gem img { width: 22px; height: 22px; object-fit: contain; }
+  .item-gem.master { color: #e07a7a; background: rgba(224, 122, 122, .22); }
+  .item-gem.veteran { color: #c4a3ff; background: rgba(196, 163, 255, .22); }
+  .item-gem.stalker { color: #8ebfff; background: rgba(142, 191, 255, .22); }
+  .item-gem.newbie { color: #9ddeaf; background: rgba(157, 222, 175, .22); }
+  .item-gem.legend { color: #e0b15a; background: rgba(224, 177, 90, .24); }
+  .item-gem.common { color: #f4f1ea; background: rgba(244, 241, 234, .2); }
+  .item-gem.quest { color: #d7c16e; background: rgba(215, 193, 110, .2); }
+  td.named { display: flex; align-items: center; gap: 8px; }
   .price { color: #8dcdf2; font-size: 14px; }
   .profit { display: flex; flex-direction: column; width: fit-content; color: #65d66a; font-size: 14px; }
   .profit > i { width: 65px; height: 3px; margin-top: 5px; overflow: hidden; border-radius: 3px; background: #263138; }
@@ -1048,7 +1054,7 @@ PAGE = r"""<!DOCTYPE html>
   .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
   .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
   .detail { border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
-  .filters h3, .detail h2 { margin: 4px 0; }
+  .filters h3, .detail h2 { margin: 4px 0; display: flex; align-items: center; gap: 8px; }
   .filters label { color: var(--dim); font-size: 12px; }
   .range { display: flex; gap: 8px; }
   .range input { width: 100%; }
@@ -1056,8 +1062,8 @@ PAGE = r"""<!DOCTYPE html>
   .result-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
   .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; cursor: pointer; color: inherit; }
   .pick.on { border-color: var(--green); background: #14211b; }
-  .pick .avatar { position: relative; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #101614; color: var(--green); font-weight: 700; flex-shrink: 0; overflow: hidden; }
-  .pick .avatar img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; }
+  .pick .avatar, .pick .item-gem { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 10px; }
+  .pick .item-gem img { width: 30px; height: 30px; }
   .pick .who { display: flex; flex-direction: column; min-width: 0; }
   .pick .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pick .who small, .found { color: var(--dim); }
@@ -1164,9 +1170,34 @@ const TAB_BLURB = {
   protos: "Протоартефакты, если после комиссии есть запас."
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}, byName:new Map()};
 const TAB_ICON = {buys:"cart", book:"clipboard", farm:"sprout", arsenal:"shield", shelter_buy:"home", shelter_sell:"home", consumables:"capsule", arts:"diamond", protos:"flask", auc:"gavel", map:"pin", log:"log"};
 const $ = (id) => document.getElementById(id);
+const RANK_TONE = {RANK_LEGEND:"legend", RANK_MASTER:"master", RANK_VETERAN:"veteran", RANK_STALKER:"stalker", RANK_NEWBIE:"newbie", DEFAULT:"common", QUEST_ITEM:"quest"};
+const Q_TONE = ["common", "newbie", "stalker", "veteran", "master", "legend"];
+function rememberItems(items) {
+  (items || []).forEach(item => {
+    if (!item) return;
+    if (item.name) state.byName.set(item.name, item);
+    if (item.id) state.byName.set(item.id, item);
+  });
+}
+function baseName(name) {
+  return String(name || "").split(",")[0].trim();
+}
+function knownItem(name) {
+  return state.byName.get(baseName(name)) || state.byName.get(name) || {};
+}
+function toneOf(name, tag) {
+  const quality = /^q(\d)$/.exec(tag || "");
+  if (quality) return Q_TONE[Number(quality[1])] || "common";
+  return RANK_TONE[knownItem(name).color] || "common";
+}
+function gem(name, tag, iconUrl) {
+  const src = iconUrl || knownItem(name).icon || "";
+  const img = src ? `<img src="${esc(src)}" alt="" onerror="this.remove()">` : "";
+  return `<b class="item-gem ${toneOf(name, tag)}">${img}</b>`;
+}
 const ICONS = {
   cart: '<circle cx="9" cy="20" r="1"/><circle cx="19" cy="20" r="1"/><path d="M3 4h3l2.4 11.5a2 2 0 0 0 2 1.5h7.7a2 2 0 0 0 2-1.6L22 8H7"/>',
   clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M9 9h6M9 13h6M9 17h4"/>',
@@ -1264,7 +1295,12 @@ function paint(key) {
     return;
   }
   const head = cols.map((c, i) => `<th data-i="${i}">${c}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
-  const body = rows.map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
+  const body = rows.map(r => {
+    const cells = r.cells.map((c, i) => i === 0
+      ? `<td class="named">${gem(c, r.tag)}<span>${esc(c)}</span></td>`
+      : `<td>${esc(c)}</td>`);
+    return `<tr class="${r.tag || ""}">${cells.join("")}</tr>`;
+  }).join("");
   box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
   box.querySelectorAll("th").forEach(th => th.onclick = () => {
     const i = Number(th.dataset.i);
@@ -1281,7 +1317,6 @@ function paintBuys(box, rows, rule) {
     box.innerHTML = `<div class="empty"><div class="target">${icon("target")}</div><h2>Прогон найдёт подходящие лоты</h2><p>Запустите прогон для поиска лотов в бюджете.</p></div>`;
     return;
   }
-  const tones = ["red", "blue", "orange", "violet"];
   box.innerHTML = rows.map(r => {
     const id = `${r.cells[0]}|${r.cells[4]}`;
     const open = state.openBuy === id;
@@ -1290,7 +1325,6 @@ function paintBuys(box, rows, rule) {
     const roiText = String(r.cells[8] || "");
     const roiNum = Number((roiText.match(/(\d+(?:[.,]\d+)?)/) || [])[1]?.replace(",", ".")) || 0;
     const roi = Math.max(0, Math.min(100, roiNum));
-    const tone = tones[(r.cells[0] || "").length % tones.length];
     const bits = [[1, "Редкость"], [2, "Точка"], [3, "Лоты"], [5, "Пачка"], [6, "После 5%"], [8, "Рентабельность"], [9, "Продаж в час"], [11, "План"]]
       .filter(([i]) => r.cells[i] && r.cells[i] !== "—")
       .map(([i, name]) => `<div><b>${name}.</b> ${esc(r.cells[i])}</div>`).join("");
@@ -1298,7 +1332,7 @@ function paintBuys(box, rows, rule) {
       ? `<span class="buy-check"><input type="checkbox" class="got" data-key="${esc(id)}"${bought ? " checked" : ""}><i><span>✓</span></i></span>`
       : "<span></span>";
     const more = open ? `<div class="lot-more">${bits}<button type="button" class="ingame">Найти в аукционе</button></div>` : "";
-    return `<div class="lot-wrap"><label class="lot-row ${bought ? "purchased" : ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${check}<span class="lot-name"><b class="item-gem ${tone}"></b><span><strong>${esc(r.cells[0])}</strong><small>ROI ${esc(roiText || "—")}</small></span></span><span class="price">${esc(r.cells[4])}</span><span class="profit">${esc(r.cells[7])}<i><b style="width:${roi}%"></b></i></span><span class="hourly">${esc(r.cells[10] || "")}</span></label>${more}</div>`;
+    return `<div class="lot-wrap"><label class="lot-row ${bought ? "purchased" : ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${check}<span class="lot-name">${gem(r.cells[0], r.tag)}<span><strong>${esc(r.cells[0])}</strong><small>ROI ${esc(roiText || "—")}</small></span></span><span class="price">${esc(r.cells[4])}</span><span class="profit">${esc(r.cells[7])}<i><b style="width:${roi}%"></b></i></span><span class="hourly">${esc(r.cells[10] || "")}</span></label>${more}</div>`;
   }).join("");
   box.querySelectorAll(".lot-row").forEach(row => row.onclick = (event) => {
     if (event.target.closest(".buy-check")) return;
@@ -1423,7 +1457,7 @@ function paintBook() {
     return `<tr data-buy="${esc(String(row.buy))}">
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
-      <td>${name}</td>
+      <td class="named">${gem(row.name, "")}${name}</td>
       <td class="num">${buy}</td>
       <td><input class="qty" data-id="${esc(row.id)}" value="${esc(qty)}" placeholder="шт"></td>
       <td><input class="sell" data-id="${esc(row.id)}" value="${esc(sold)}" placeholder="за сколько продал"></td>
@@ -2174,9 +2208,8 @@ function renderItems() {
     const on = selected === i.id ? " on" : "";
     const star = state.fav.has(i.id) ? "on" : "";
     const mark = state.fav.has(i.id) ? "★" : "☆";
-    const letter = (i.name || "?").slice(0, 1);
-    const face = i.icon ? `${esc(letter)}<img src="${esc(i.icon)}" alt="" onerror="this.remove()">` : esc(letter);
-    return `<div class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}"><span class="avatar">${face}</span><span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><button type="button" class="watch ${star}" title="Избранное">${mark}</button></div>`;
+    const face = gem(i.name, "", i.icon);
+    return `<div class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}">${face}<span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><button type="button" class="watch ${star}" title="Избранное">${mark}</button></div>`;
   }).join("");
   $("items").querySelectorAll(".pick").forEach(tr => {
     tr.onclick = () => {
@@ -2204,6 +2237,7 @@ async function loadCatalog() {
 function applyCatalog(data) {
   if (!data || data.pending) return;
   state.catalog = data.items || [];
+  rememberItems(state.catalog);
   if (data.favs) state.fav = new Set(data.favs);
   if (data.recent) state.recent = data.recent;
   if (!data.ok) {
@@ -2211,11 +2245,19 @@ function applyCatalog(data) {
     return;
   }
   renderItems();
+  TAB_ORDER.forEach(paint);
+  if ($("bookbox")) paintBook();
   if ($("own-name") && document.activeElement === $("own-name")) paintOwnList();
 }
 
 function lotTable(rows, cols) {
-  const body = (rows || []).map(r => `<tr class="${r.tag || ""}">${r.cells.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
+  const item = state.catalog.find(i => i.id === selected) || {};
+  const body = (rows || []).map(r => {
+    const cells = r.cells.map((c, i) => i === 0
+      ? `<td class="named">${gem(item.name || c, r.tag, item.icon)}<span>${esc(c)}</span></td>`
+      : `<td>${esc(c)}</td>`);
+    return `<tr class="${r.tag || ""}">${cells.join("")}</tr>`;
+  }).join("");
   $("lotbox").innerHTML = `<table><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
@@ -2233,7 +2275,7 @@ async function openItem() {
   auctionLoading(true);
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
-  $("detail-name").textContent = name;
+  $("detail-name").innerHTML = `${gem(name, "", row && row.icon)}<span>${esc(name)}</span>`;
   $("lotinfo").textContent = name + ": читаю лоты…";
   $("lotstats").textContent = "Считаю среднюю и медиану…";
   let data;
@@ -2314,6 +2356,7 @@ async function tick() {
 window.addEventListener("pywebviewready", async () => {
   const boot = await pywebview.api.boot();
   state.columns = boot.columns;
+  rememberItems(boot.icons || []);
   $("budget").value = prettyMoney(boot.budget);
   build();
   $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");
