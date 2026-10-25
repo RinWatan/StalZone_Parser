@@ -1135,7 +1135,7 @@ PAGE = r"""<!DOCTYPE html>
   <header class="topbar pywebview-drag-region">
     <div class="brand">
       <button type="button" class="brand-mark" id="menu-toggle" aria-label="Открыть меню"><span>☢</span></button>
-      <strong>STALZONE</strong><em>Аукцион</em>
+      <strong>STALZONE</strong>
     </div>
     <div class="top-actions">
       <button class="primary-btn" id="run"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg> Прогон</button>
