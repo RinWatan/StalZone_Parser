@@ -47,13 +47,16 @@ copy /Y "dist\STALZONE.exe" "STALZONE.exe" >nul
 copy /Y "dist\stalzone_agent.exe" "stalzone_agent.exe" >nul
 if not exist "для_друзей" mkdir "для_друзей"
 copy /Y "STALZONE.exe" "для_друзей\STALZONE.exe" >nul
+del /q "для_друзей\license_server.json" "для_друзей\license_server.db" "для_друзей\stalzone_license_server.py" "для_друзей\license_server.url" "для_друзей\license_server.txt" 2>nul
 if exist "exbo.json" copy /Y "exbo.json" "для_друзей\exbo.json" >nul
 
 echo.
 echo Готово.
 echo   STALZONE.exe            оверлей у тебя
 echo   для_друзей\STALZONE.exe и для_друзей\exbo.json
-echo Друзьям кидай папку для_друзей: exe и ключ. Базу предметов программа скачает сама.
+echo Друзьям кидай только для_друзей\STALZONE.exe и их ключ.
+echo Не клади туда сервер, бота, базу ключей и исходники.
+echo Файл учёт.xlsx появится у них рядом с программой сам. Это их учёт.
 echo build_overlay.bat делает то же самое.
 echo Если антивирус ругнётся, это обычная ложная тревога на PyInstaller.
 echo.

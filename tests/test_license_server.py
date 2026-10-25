@@ -47,12 +47,20 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(again["active"])
         self.assertEqual(again["role"], "owner")
 
-    def test_bot_issues_a_key_only_for_the_owner(self):
-        text = server.answer(self.store, 7, "/ключ 30", now=1_000)
-        token = text.splitlines()[2]
-        opened = self.store.activate(token, "pc-a", now=1_000)
-        self.assertTrue(opened["active"])
-        self.assertEqual(server.answer(self.store, 8, "/список", now=1_000), "Это пульт владельца.")
+    def test_bot_stranger_sees_only_his_own_key(self):
+        self.store.configured_owner = 7
+        issued = server.answer(self.store, 7, "/ключ 30", now=1_000)
+        token = issued.splitlines()[2]
+        other = server.answer(self.store, 7, "/ключ 7", now=1_000).splitlines()[2]
+        own = server.answer(self.store, 8, token, now=1_000)
+        self.assertIn("ещё не входили", own)
+        self.assertNotIn(other, own)
+        self.assertNotIn(token, own)
+        blocked = server.answer(self.store, 8, "/список", now=1_000)
+        self.assertNotIn(token, blocked)
+        self.assertNotIn("владелец", blocked.lower())
+        forged = server.answer(self.store, 8, "/ключ 30", now=1_000)
+        self.assertNotIn("Номер:", forged)
 
     def test_http_activate_returns_a_signed_lease(self):
         token, _key_id, _days = self.store.issue(30, now=1_000)

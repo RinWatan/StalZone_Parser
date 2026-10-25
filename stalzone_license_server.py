@@ -58,6 +58,14 @@ def load_config():
     if not isinstance(data, dict) or not str(data.get("token") or "").strip():
         raise SystemExit('В license_server.json нет поля "token".')
     data["token"] = str(data["token"]).strip()
+    raw_owner = str(data.get("owner_id") or "").strip()
+    if raw_owner:
+        try:
+            data["owner_id"] = int(raw_owner)
+        except ValueError:
+            raise SystemExit('Поле "owner_id" должно быть числом, это твой номер в Telegram.')
+    else:
+        data["owner_id"] = None
     try:
         data["port"] = int(data.get("port") or 8787)
     except (TypeError, ValueError):
@@ -197,6 +205,28 @@ class Store:
         view["lease"] = lic.pack_lease(seat)
         return view
 
+    def public_status(self, key, now=None):
+        moment = time.time() if now is None else float(now)
+        try:
+            payload = lic.decode(key)
+        except Exception:
+            return "Ключ не подходит."
+        with self.lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM keys WHERE id = ?", (payload["id"],)).fetchone()
+            data = dict(row) if row is not None else None
+        if not data or data["token"] != str(key).strip():
+            return "Ключ не подходит."
+        if data["revoked"]:
+            return "Этот ключ закрыт."
+        if data["role"] == "owner":
+            return "Ключ владельца, без срока. Чужому ПК он не отдаётся."
+        if not data["activated"]:
+            return f"Этим ключом ещё не входили. Срок {int(data['days'] or 0)} дн. пойдёт с первого входа и не встанет на паузу."
+        if data["expires"] and moment >= float(data["expires"]):
+            return "Срок кончился. Дни, пока ключом не пользовались, не возвращаются."
+        left = max(0, int((float(data["expires"]) - moment + lic.DAY - 1) // lic.DAY))
+        return f"Подписка идёт, ещё {left} дн. Другому человеку этот ключ не откроется."
+
 
 def describe(row, now):
     if row["revoked"]:
@@ -213,10 +243,56 @@ def describe(row, now):
     return f"{row['id']} · {state}"
 
 
+def is_admin(store, chat_id):
+    configured = getattr(store, "configured_owner", None)
+    if configured:
+        return int(chat_id) == int(configured)
+    current = store.owner()
+    return current is not None and int(current) == int(chat_id)
+
+
+def _key_from_user(text):
+    parts = str(text or "").strip().split()
+    if not parts:
+        return ""
+    cmd = parts[0].split("@", 1)[0].lower()
+    if cmd in ("/status", "/my", "/мой"):
+        return parts[1].strip() if len(parts) > 1 else ""
+    if cmd.startswith("/"):
+        return ""
+    if "." in parts[0] and len(parts[0]) > 20:
+        return parts[0].strip()
+    return ""
+
+
+_LOOKUPS = {}
+
+
+def _allow_lookup(chat_id, now):
+    hits = [stamp for stamp in _LOOKUPS.get(chat_id, []) if now - stamp < 60]
+    if len(hits) >= 6:
+        _LOOKUPS[chat_id] = hits
+        return False
+    hits.append(now)
+    _LOOKUPS[chat_id] = hits
+    return True
+
+
+def user_answer(store, chat_id, text, now):
+    key = _key_from_user(text)
+    if not key:
+        if store.owner() is None and not getattr(store, "configured_owner", None):
+            return f"Пульт ещё не закреплён. Твой номер: {chat_id}. Его вписывают в файл сервера, не в этот чат."
+        return "Пришли свой ключ одним сообщением. Здесь видно только его: чужой список и новые ключи недоступны."
+    if not _allow_lookup(chat_id, now):
+        return "Слишком часто. Подожди минуту."
+    return store.public_status(key, now)
+
+
 def answer(store, chat_id, text, now=None):
     moment = time.time() if now is None else float(now)
-    if not store.claim_owner(chat_id):
-        return "Это пульт владельца."
+    if not is_admin(store, chat_id):
+        return user_answer(store, chat_id, text, moment)
     parts = str(text or "").strip().split()
     if not parts:
         return help_text()
@@ -331,6 +407,7 @@ def poll(token, store):
 def main():
     cfg = load_config()
     store = Store(folder() / "license_server.db")
+    store.configured_owner = cfg.get("owner_id")
     threading.Thread(target=serve, args=(store, cfg["port"]), daemon=True).start()
     print(f"Сервер ключей слушает порт {cfg['port']}.")
     print("Открой бота в личке и нажми Start. Первое сообщение закрепляет владельца.")

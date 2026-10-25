@@ -221,7 +221,39 @@ def _view(seat, now):
     }
 
 
+_REMOTE_CACHE = {"until": 0.0, "key": "", "machine": "", "result": None}
+
+
+def _status_remote():
+    seat = _load_seat(None)
+    key = str((seat or {}).get("key") or "").strip()
+    pc = machine_id(None)
+    moment = time.time()
+    cached = _REMOTE_CACHE
+    if not key:
+        return {"ok": True, "active": False, "reason": "Нет ключа"}
+    if cached["result"] and cached["key"] == key and cached["machine"] == pc and moment < cached["until"]:
+        return cached["result"]
+    fresh = _ask_server(key, pc, server_url())
+    if fresh is None:
+        return {"ok": False, "active": False, "reason": "Сервер подписки недоступен"}
+    if fresh.get("active"):
+        _save_remote(fresh, key, None)
+    else:
+        try:
+            _seat_path(None).unlink()
+        except FileNotFoundError:
+            pass
+    cached["until"] = moment + 20
+    cached["key"] = key
+    cached["machine"] = pc
+    cached["result"] = fresh
+    return fresh
+
+
 def status(root=None, now=None):
+    if root is None and server_url():
+        return _status_remote()
     seat = _load_seat(root)
     if seat and seat.get("broken"):
         return {"ok": True, "active": False, "reason": "Ключ не подходит"}
