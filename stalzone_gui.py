@@ -1248,7 +1248,7 @@ PAGE = r"""<!DOCTYPE html>
 </head>
 <body data-screen="buys" class="full">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
-<div id="license" class="on"><form class="lic-card" onsubmit="return false"><button type="button" id="license-close" aria-label="Закрыть">×</button><div class="brand-mark"></div><strong>STALZONE</strong><input id="license-key" placeholder="Ключ" autocomplete="off"/><button type="button" class="gold" id="license-go">Войти</button><button type="button" id="license-buy">Купить подписку</button><small id="license-msg"></small></form></div>
+<div id="license" class="on"><form class="lic-card" onsubmit="return false"><button type="button" id="license-close" aria-label="Закрыть">×</button><div class="brand-mark"></div><strong>STALZONE</strong><p>Один ключ на одного человека. Срок идёт с первого входа и не останавливается, если выйти.</p><input id="license-key" placeholder="Ключ" autocomplete="off"/><button type="button" class="gold" id="license-go">Войти</button><button type="button" id="license-buy">Купить подписку</button><small id="license-msg"></small></form></div>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
     <div class="brand">
