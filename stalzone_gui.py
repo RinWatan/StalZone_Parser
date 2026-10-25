@@ -911,8 +911,8 @@ PAGE = r"""<!DOCTYPE html>
   button, select, input { font: inherit; color: inherit; }
   button { cursor: pointer; }
   button:disabled { opacity: 0.45; cursor: default; }
-  button.gold { background: linear-gradient(#349a3f, #267d32); color: #e9eaeb; font-weight: 600; border: 1px solid #42a442; border-radius: 8px; }
-  button.stop { background: #3a2222; color: #f0c2b8; border: 0; border-radius: 8px; padding: 8px 12px; }
+  button.gold, .primary-btn { background: linear-gradient(#2abf4e, #168732); color: #f4fff6; font-weight: 700; border: 1px solid #45cf5f; border-radius: 9px; }
+  button.stop, .stop-btn, #bookbox button.drop, #ask-yes { background: linear-gradient(#e52f3e, #bd1f2d); color: #fff; border: 1px solid #e74550; border-radius: 9px; padding: 8px 12px; }
   body { display: flex; flex-direction: column; overflow: hidden; }
   header.compact-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; flex-shrink: 0; border-bottom: 1px solid #263039; background: #0c1216; }
   header.compact-head h1 { margin: 0; font-size: 15px; letter-spacing: 0.08em; color: var(--green); }
@@ -938,16 +938,16 @@ PAGE = r"""<!DOCTYPE html>
   .app-shell.menu-open { grid-template-columns: 220px 1fr; }
   .topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; border-bottom: 1px solid #263039; background: rgba(12, 18, 22, .95); box-shadow: 0 2px 14px #0008; }
   .brand { height: 100%; width: 220px; flex: 0 0 220px; display: flex; align-items: center; gap: 9px; padding: 0 14px; border-right: 1px solid #252d32; white-space: nowrap; }
-  .brand-mark { width: 37px; height: 37px; flex: 0 0 37px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; color: #09100b; background: linear-gradient(135deg, #66db58, #38aa35); }
-  .brand-mark span { font-size: 26px; line-height: 1; }
-  .brand strong { color: var(--green); font-size: 19px; }
+  .brand-mark, .logwin .mark { width: 42px; height: 42px; flex: 0 0 42px; display: block; padding: 0; border: 0; border-radius: 0; overflow: hidden; background: #45df61 url("data:image/jpeg;base64,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") center/cover no-repeat; }
+  .logwin .mark { width: 32px; height: 32px; flex: 0 0 32px; }
+  .brand strong { color: #48ed61; font-size: 18px; font-weight: 800; }
   .brand em { color: #b4b7ba; font-style: normal; font-size: 16px; }
   .top-actions { display: flex; gap: 10px; flex: 0 0 auto; }
-  .topbar button.primary-btn, .topbar button.outline-btn, .topbar button.stop-btn { display: flex; align-items: center; justify-content: center; gap: 6px; height: 40px; border-radius: 8px; font-size: 14px; color: #e9eaeb; white-space: nowrap; }
-  .primary-btn { padding: 0 12px; border: 1px solid #42a442; background: linear-gradient(#349a3f, #267d32); box-shadow: inset 0 1px #75cc7470; }
-  .outline-btn { padding: 0 10px; border: 1px solid #313b42; background: #10161a; }
-  .outline-btn.active, .outline-btn.on { border-color: #4ebf48; color: #61d55a; }
-  .stop-btn { padding: 0 12px; border: 1px solid #a7292d; background: linear-gradient(#c52a31, #a91f25); }
+  .topbar button.primary-btn, .topbar button.outline-btn, .topbar button.stop-btn { display: flex; align-items: center; justify-content: center; gap: 8px; height: 45px; border-radius: 9px; font-size: 15px; font-weight: 700; color: #e9eaeb; white-space: nowrap; }
+  .primary-btn { padding: 0 16px; }
+  .outline-btn, button.ingame, .bar button, .tools button, .sub button, #ask-no { padding: 0 14px; border: 1px solid #303941; background: #12191e; color: #e9eaeb; border-radius: 9px; }
+  .outline-btn.active, .outline-btn.on, .sub button.on, #mapbar button.on, #maplayers button.on { border-color: #22823b; color: #fff; background: #123522; }
+  .stop-btn { padding: 0 16px; }
   .stop-btn b { width: 15px; height: 15px; background: #f3f3f3; border-radius: 1px; }
   .settings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 42px; flex: 1; min-width: 0; }
   .setting { min-width: 0; padding: 0 10px; overflow: hidden; border-left: 1px solid #20282d; display: flex; flex-direction: column; justify-content: center; gap: 2px; white-space: nowrap; }
@@ -964,7 +964,7 @@ PAGE = r"""<!DOCTYPE html>
   .tabs button { width: 100%; height: 44px; display: flex; align-items: center; gap: 15px; padding: 0 13px; border: 1px solid transparent; border-radius: 8px; color: #b9bdc1; background: transparent; font-size: 16px; text-align: left; }
   .tabs button svg { flex: 0 0 auto; }
   .tabs button:hover { background: #111a1c; color: #e8e9e9; }
-  .tabs button.on { border-color: #225e31; color: #5ed457; background: linear-gradient(90deg, rgba(28, 76, 38, .32), rgba(24, 63, 35, .12)); }
+  .tabs button.on { border-color: #16742a; color: #3ee95b; background: #0e2b19; }
   .subscription-card { position: relative; margin-top: auto; display: flex; align-items: center; gap: 12px; padding: 14px; overflow: hidden; border: 1px solid #285e34; border-radius: 9px; background: linear-gradient(135deg, rgba(35, 82, 45, .38), rgba(15, 27, 21, .72)); }
   .subscription-icon { flex: 0 0 38px; width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid #34763f; border-radius: 8px; color: var(--green); background: rgba(42, 103, 52, .24); }
   .subscription-card small { display: block; color: #7e8982; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
@@ -1080,15 +1080,11 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox input.sell { width: 108px; text-align: right; }
   #bookbox input.buy, #bookbox input.name { width: 100%; min-width: 0; box-sizing: border-box; }
   #bookbox button.ingame { padding: 4px 8px; white-space: nowrap; }
-  #bookbox button.drop, #ask-yes {
-    border: 1px solid #a7292d; border-radius: 8px; padding: 6px 12px; white-space: nowrap;
-    background: linear-gradient(#c52a31, #a91f25); color: #f7f7f7;
-  }
-  #ask-no, #ask-yes { border-radius: 8px; padding: 8px 14px; }
-  #ask-no { border: 1px solid #313b42; background: #10161a; color: #e9eaeb; }
+  #bookbox button.drop, #ask-yes { padding: 6px 12px; white-space: nowrap; }
+  #ask-no, #ask-yes { height: auto; padding: 8px 14px; }
   #bookbox tr[class*="tone-"] td { border-top: 0; border-left: 0; border-right: 0; border-bottom: 1px solid #242e33; }
   #bookbox tr[class*="tone-"] td:first-child { box-shadow: inset 4px 0 0 var(--frame); }
-  button.ingame { border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; padding: 6px 10px; }
+  button.ingame { height: auto; padding: 6px 10px; }
   .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
   .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
   .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
@@ -1113,23 +1109,22 @@ PAGE = r"""<!DOCTYPE html>
   #lotinfo { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
   #lotstats { color: var(--dim); font-size: 13px; padding: 4px 2px 8px; }
   .sub { display: flex; gap: 6px; }
-  .sub button { border: 1px solid #313b42; border-radius: 8px; background: #10161a; padding: 8px 12px; }
-  .sub button.on { color: #071009; background: var(--green); border-color: var(--green); }
+  .sub button { height: auto; padding: 8px 12px; }
   .tools { display: flex; gap: 8px; align-items: center; padding: 8px; flex-wrap: wrap; }
-  .tools button, .bar button { border: 1px solid #313b42; border-radius: 8px; background: #10161a; padding: 8px 12px; color: #e9eaeb; }
+  .tools button, .bar button { height: auto; padding: 8px 12px; }
   .mapwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-  #mapbar button.on, #maplayers button.on { background: var(--green); color: #071009; }
+
   #mapq { width: 180px; text-align: left; }
   #wikimap { flex: 1; min-height: 0; background: #0e0c0a; }
   #logwin { position: fixed; z-index: 4000; inset: 74px 0 0 0; display: none; align-items: center; justify-content: center; pointer-events: none; }
   #logwin.on { display: flex; }
   .logwin { pointer-events: auto; width: min(760px, calc(100% - 48px)); height: min(560px, calc(100% - 36px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #273037; border-radius: 12px; background: #0c1216; box-shadow: 0 22px 60px #000c; }
   .logwin header { height: 58px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid #263039; background: rgba(12,18,22,.98); }
-  .logwin .mark { width: 32px; height: 32px; display: grid; place-items: center; color: #09100b; background: linear-gradient(135deg,#66db58,#38aa35); font-size: 20px; }
+  .logwin .mark { width: 32px; height: 32px; flex: 0 0 32px; }
   .logwin strong { color: var(--green); font-size: 16px; }
   .logwin em { color: #b4b7ba; font-style: normal; }
   .logwin .state { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #aeb2b5; font-size: 13px; }
-  .logwin button { width: 36px; height: 36px; padding: 0; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; line-height: 1; }
+  .logwin button { width: 36px; height: 36px; padding: 0; border: 1px solid #303941; border-radius: 9px; background: #12191e; color: #e9eaeb; font-size: 22px; line-height: 1; }
   .logwin .log-lines { flex: 1; min-height: 0; overflow: auto; padding: 8px 16px 14px; color: #b8bdc0; font-size: 14px; line-height: 26px; }
   .logwin .log-lines p { margin: 0; }
   .logwin mark { color: #5ed257; background: none; }
@@ -1146,7 +1141,7 @@ PAGE = r"""<!DOCTYPE html>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
     <div class="brand">
-      <button type="button" class="brand-mark" id="menu-toggle" aria-label="Открыть меню"><span>☢</span></button>
+      <button type="button" class="brand-mark" id="menu-toggle" aria-label="Открыть меню"></button>
       <strong>STALZONE</strong>
     </div>
     <div class="top-actions">
@@ -1187,7 +1182,7 @@ PAGE = r"""<!DOCTYPE html>
 <div id="logwin">
   <section class="logwin" role="dialog" aria-label="Лог">
     <header>
-      <span class="mark">☢</span>
+      <span class="mark"></span>
       <strong>STALZONE</strong>
       <em>Лог</em>
       <span class="state"><i class="dot"></i> <em id="log-state">Онлайн</em></span>
