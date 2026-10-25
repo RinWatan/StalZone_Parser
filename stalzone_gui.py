@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 import stalzone_agent as agent
+import stalzone_db
 import stalzone_ledger as book
 import stalzone_lunar as lunar
 import stalzone_pda as pda
@@ -663,6 +664,7 @@ class Bridge:
                         "name": i["name"],
                         "cat": i["cat"],
                         "color": i.get("color") or "DEFAULT",
+                        "icon": stalzone_db.icon_url(i.get("icon")),
                         "rank": agent.RANK_NAME.get(i.get("color"), i.get("color") or ""),
                         "order": agent.RANK_ORDER.get(i.get("color"), 9),
                     }
@@ -1054,7 +1056,8 @@ PAGE = r"""<!DOCTYPE html>
   .result-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
   .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; cursor: pointer; color: inherit; }
   .pick.on { border-color: var(--green); background: #14211b; }
-  .pick .avatar { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #101614; color: var(--green); font-weight: 700; flex-shrink: 0; }
+  .pick .avatar { position: relative; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #101614; color: var(--green); font-weight: 700; flex-shrink: 0; overflow: hidden; }
+  .pick .avatar img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; }
   .pick .who { display: flex; flex-direction: column; min-width: 0; }
   .pick .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pick .who small, .found { color: var(--dim); }
@@ -2172,7 +2175,8 @@ function renderItems() {
     const star = state.fav.has(i.id) ? "on" : "";
     const mark = state.fav.has(i.id) ? "★" : "☆";
     const letter = (i.name || "?").slice(0, 1);
-    return `<div class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}"><span class="avatar">${esc(letter)}</span><span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><button type="button" class="watch ${star}" title="Избранное">${mark}</button></div>`;
+    const face = i.icon ? `${esc(letter)}<img src="${esc(i.icon)}" alt="" onerror="this.remove()">` : esc(letter);
+    return `<div class="pick ${esc(i.color)}${on}" data-id="${esc(i.id)}"><span class="avatar">${face}</span><span class="who"><b>${esc(i.name)}</b><small>${esc(i.cat)} · ${esc(i.rank)}</small></span><button type="button" class="watch ${star}" title="Избранное">${mark}</button></div>`;
   }).join("");
   $("items").querySelectorAll(".pick").forEach(tr => {
     tr.onclick = () => {

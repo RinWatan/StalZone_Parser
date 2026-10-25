@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 import httpx
 import stalzone_agent as a
+import stalzone_db
 
 class ScanTests(unittest.TestCase):
     def setUp(self):
@@ -30,10 +31,13 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(
             items,
             [
-                {"id": "nope", "name": "nope", "cat": "misc", "color": "DEFAULT"},
-                {"id": "9mmq", "name": "Аптечка", "cat": "supply", "color": "RANK_VETERAN"},
+                {"id": "nope", "name": "nope", "cat": "misc", "color": "DEFAULT", "icon": "", "status": "", "tradable": 1, "reason": ""},
+                {"id": "9mmq", "name": "Аптечка", "cat": "supply", "color": "RANK_VETERAN", "icon": "", "status": "", "tradable": 1, "reason": ""},
             ],
         )
+        stored = stalzone_db.get_item(a.DIR / "items.db", "quest")
+        self.assertEqual(stored["tradable"], 0)
+        self.assertIsNone(stalzone_db.get_item(a.DIR / "items.db", "10"))
 
     def test_unchanged_database_is_not_downloaded_again(self):
         path = a.DIR / "catalog.json"
@@ -63,6 +67,17 @@ class ScanTests(unittest.TestCase):
             get.assert_not_called()
         with patch.object(a,'auction_listing',return_value=[{'id':'abc','name':'Test item','cat':'medicine','color':'DEFAULT'}]):
             self.assertEqual(a.buy_targets(),[])
+    def test_unknown_auction_item_is_remembered(self):
+        request = httpx.Request("GET", a.EXBO + "/RU/auction/abc/lots")
+        response = httpx.Response(404, request=request)
+        error = httpx.HTTPStatusError("нет", request=request, response=response)
+        with patch.object(a, "live_lots", side_effect=error):
+            self.assertEqual(a._buy_one(self.item), [])
+        self.assertIn("abc", a._off_auction())
+        row = stalzone_db.get_item(a.DIR / "items.db", "abc")
+        self.assertEqual(row["tradable"], 0)
+        self.assertEqual(row["reason"], "auction")
+
     def test_stop_does_not_issue_more_requests(self):
         a.HALT.set()
         with patch.object(a,'live_lots') as lots, patch.object(a,'get_json') as get:
