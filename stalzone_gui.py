@@ -1076,6 +1076,14 @@ PAGE = r"""<!DOCTYPE html>
   #q { width: 100%; text-align: left; }
   #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, .72); align-items: center; justify-content: center; }
   #ask.on { display: flex; }
+  #splash { position: fixed; inset: 0; z-index: 6000; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #080d11; }
+  #splash.on { display: flex; }
+  #splash.off { opacity: 0; pointer-events: none; transition: opacity .35s ease; }
+  #splash .brand-mark { width: 84px; height: 84px; }
+  #splash strong { color: #48ed61; font: 800 22px Arial, sans-serif; letter-spacing: .14em; }
+  .splash-bar { width: 168px; height: 3px; overflow: hidden; border-radius: 3px; background: #1c262c; }
+  .splash-bar i { display: block; width: 40%; height: 100%; background: #45df61; animation: splash-run 1.1s ease-in-out infinite; }
+  @keyframes splash-run { from { transform: translateX(-130%); } to { transform: translateX(340%); } }
   .ask-card { width: min(420px, calc(100% - 32px)); background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 18px 18px 14px; }
   .ask-card p { margin: 0 0 16px; }
   .ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -1201,6 +1209,7 @@ PAGE = r"""<!DOCTYPE html>
 </style>
 </head>
 <body data-screen="buys" class="full">
+<div id="splash" class="on"><div class="brand-mark"></div><strong>STALZONE</strong><span class="splash-bar"><i></i></span></div>
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
@@ -2572,6 +2581,8 @@ window.addEventListener("pywebviewready", async () => {
   const boot = await pywebview.api.boot();
   state.columns = boot.columns;
   rememberItems(boot.icons || []);
+  const splash = $("splash");
+  if (splash) setTimeout(() => { splash.classList.add("off"); setTimeout(() => splash.remove(), 400); }, 1200);
   $("budget").value = prettyMoney(boot.budget);
   build();
   $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");
@@ -2617,15 +2628,19 @@ def main():
     from stalzone_overlay import HudController
     bridge = Bridge()
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
-    window = webview.create_window("STALZONE — карта и оверлей", html=PAGE, js_api=bridge,
+    window = webview.create_window("STALZONE", html=PAGE, js_api=bridge,
         width=1280, height=820, min_size=(960, 640), frameless=True,
-        easy_drag=False, on_top=True, hidden=True, background_color='#080d11')
+        easy_drag=False, on_top=False, hidden=True, background_color='#080d11')
     hud = HudController(window, folder / 'overlay_settings.json')
     bridge._hud = hud
     window.events.loaded += hud.start
     def closing():
-        agent.HALT.set()
-        hud.closing()
+        if hud.quit_requested:
+            agent.HALT.set()
+            hud.closing()
+            return True
+        hud.command('close')
+        return False
     window.events.closing += closing
     window.events.closed += hud.stop
     webview.start(gui='edgechromium')
