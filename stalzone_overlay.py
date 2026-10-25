@@ -82,6 +82,115 @@ class GlobalHotkey:
             self.registered = False
 
 
+class TrayIcon:
+    """Значок в трее Windows. На других системах ничего не делает."""
+
+    def __init__(self, on_open, on_quit):
+        self.on_open = on_open
+        self.on_quit = on_quit
+        self.hwnd = None
+        self._proc = None
+        self._user32 = None
+        self.ready = threading.Event()
+        if sys.platform != 'win32':
+            self.ready.set()
+            return
+        self.thread = threading.Thread(target=self._run, name='STALZONE-tray', daemon=True)
+        self.thread.start()
+        self.ready.wait(2)
+
+    def close(self):
+        if not self.hwnd or not self._user32:
+            return
+        self._user32.PostMessageW(self.hwnd, 0x0010, 0, 0)
+
+    def _run(self):
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+        self._user32 = user32
+        LRESULT = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [
+                ('style', wintypes.UINT), ('lpfnWndProc', WNDPROC),
+                ('cbClsExtra', ctypes.c_int), ('cbWndExtra', ctypes.c_int),
+                ('hInstance', wintypes.HINSTANCE), ('hIcon', wintypes.HICON),
+                ('hCursor', wintypes.HANDLE), ('hbrBackground', wintypes.HBRUSH),
+                ('lpszMenuName', wintypes.LPCWSTR), ('lpszClassName', wintypes.LPCWSTR),
+            ]
+
+        class NOTIFYICONDATAW(ctypes.Structure):
+            _fields_ = [
+                ('cbSize', wintypes.DWORD), ('hWnd', wintypes.HWND), ('uID', wintypes.UINT),
+                ('uFlags', wintypes.UINT), ('uCallbackMessage', wintypes.UINT),
+                ('hIcon', wintypes.HICON), ('szTip', wintypes.WCHAR * 128),
+                ('dwState', wintypes.DWORD), ('dwStateMask', wintypes.DWORD),
+                ('szInfo', wintypes.WCHAR * 256), ('uTimeout', wintypes.UINT),
+                ('szInfoTitle', wintypes.WCHAR * 64), ('dwInfoFlags', wintypes.DWORD),
+                ('guidItem', ctypes.c_byte * 16), ('hBalloonIcon', wintypes.HICON),
+            ]
+
+        tray_msg = 0x0400 + 20
+        owner = self
+
+        def wndproc(hwnd, msg, wparam, lparam):
+            if msg == tray_msg and lparam in (0x0202, 0x0203):
+                owner.on_open()
+                return 0
+            if msg == tray_msg and lparam == 0x0205:
+                menu = user32.CreatePopupMenu()
+                user32.AppendMenuW(menu, 0, 1, 'Открыть')
+                user32.AppendMenuW(menu, 0, 2, 'Выход')
+                point = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(point))
+                user32.SetForegroundWindow(hwnd)
+                user32.TrackPopupMenu(menu, 0, point.x, point.y, 0, hwnd, None)
+                user32.PostMessageW(hwnd, 0, 0, 0)
+                user32.DestroyMenu(menu)
+                return 0
+            if msg == 0x0111:
+                if wparam == 1:
+                    owner.on_open()
+                elif wparam == 2:
+                    owner.on_quit()
+                return 0
+            if msg == 0x0010:
+                nid = NOTIFYICONDATAW()
+                nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+                nid.hWnd = hwnd
+                nid.uID = 1
+                shell32.Shell_NotifyIconW(2, ctypes.byref(nid))
+                user32.DestroyWindow(hwnd)
+                user32.PostQuitMessage(0)
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        self._proc = WNDPROC(wndproc)
+        instance = ctypes.windll.kernel32.GetModuleHandleW(None)
+        klass = WNDCLASSW()
+        klass.lpfnWndProc = self._proc
+        klass.hInstance = instance
+        klass.lpszClassName = 'STALZONETray'
+        user32.RegisterClassW(ctypes.byref(klass))
+        self.hwnd = user32.CreateWindowExW(0, 'STALZONETray', 'STALZONE', 0, 0, 0, 0, 0, wintypes.HWND(-3), None, instance, None)
+        icon = user32.LoadIconW(None, wintypes.LPCWSTR(32512))
+        nid = NOTIFYICONDATAW()
+        nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        nid.hWnd = self.hwnd
+        nid.uID = 1
+        nid.uFlags = 1 | 2 | 4
+        nid.uCallbackMessage = tray_msg
+        nid.hIcon = icon
+        nid.szTip = 'STALZONE'
+        shell32.Shell_NotifyIconW(0, ctypes.byref(nid))
+        self.ready.set()
+        message = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(message))
+            user32.DispatchMessageW(ctypes.byref(message))
+
+
 class HudController:
     """Window state is owned by the controller thread; bridge only queues commands."""
     def __init__(self, window, settings_path, native=None):
@@ -96,6 +205,7 @@ class HudController:
         self.bounds = None
         self.visible = None
         self.hotkey = None
+        self.tray = None
         self.commands = queue.Queue()
         self.stopped = threading.Event()
         self.lock = threading.Lock()
@@ -105,12 +215,18 @@ class HudController:
         self._last_find = 0
         self._initial = True
         self._applied_interactive = None
+        self._applied_top = None
+        self.session = 'desk'
+        self.parked = False
+        self.quit_requested = False
 
     def command(self, action):
-        if action not in ('toggle', 'full', 'compact', 'passive', 'close'):
+        if action not in ('toggle', 'full', 'compact', 'passive', 'close', 'open', 'quit'):
             return {'ok': False, 'error': 'Неизвестная команда'}
         if action == 'compact':
             return {'ok': True}
+        if action == 'quit':
+            self.quit_requested = True
         self.commands.put(action)
         return {'ok': True}
 
@@ -125,14 +241,10 @@ class HudController:
             handle = self.window.native.Handle.ToInt64()
             self.native = GameWindow(lambda: handle)
         self.hotkey = GlobalHotkey(lambda: self.command('toggle'))
-        # Do not leave a hidden window that cannot be reopened without its hotkey.
+        self.tray = TrayIcon(lambda: self.command('open'), lambda: self.command('quit'))
         if not self.hotkey.registered:
-            self.native.notify('F10 занята другой программой или копией оверлея. '
-                               'Закройте предыдущую копию или освободите клавишу и запустите снова.')
-            self.stopped.set()
-            self.hotkey.close()
-            self.window.destroy()
-            return
+            self.native.notify('F10 занята другой программой. Окно откроется как обычно, '
+                               'оверлей в игре с этой кнопки не вызовется.')
         self._thread = threading.Thread(target=self._run, name='STALZONE-HUD', daemon=True)
         self._thread.start()
 
@@ -153,6 +265,8 @@ class HudController:
             self.remember()
             if self.hotkey:
                 self.hotkey.close()
+            if self.tray:
+                self.tray.close()
 
     def remember(self):
         if self._layout_key is None:
@@ -161,7 +275,8 @@ class HudController:
         if not rect:
             return
         x, y, width, height = rect
-        left, top, _, _ = self.bounds or self.native.work_area()
+        frame = self.bounds if self.session == 'overlay' and self.bounds else self.native.work_area()
+        left, top, _, _ = frame
         self.settings[self.mode] = {'dx': x-left, 'dy': y-top, 'w': width, 'h': height}
         try:
             self.settings_path.write_text(json.dumps(self.settings, ensure_ascii=False), encoding='utf-8')
@@ -196,12 +311,35 @@ class HudController:
                 action = self.commands.get_nowait()
             except queue.Empty:
                 break
-            if action == 'close':
+            if action == 'quit':
                 self.remember()
                 self.stopped.set()
+                if self.tray:
+                    self.tray.close()
                 self.window.destroy()
                 return
+            if action == 'close':
+                self.parked = True
+                self.session = 'desk'
+                self.visible = False
+                self.native.show(False)
+                continue
+            if action == 'open':
+                self.parked = False
+                self.session = 'desk'
+                activate = True
+                continue
             if action == 'toggle':
+                watching = bool(self.bounds and self.native.foreground() == self.game)
+                if self.session != 'overlay':
+                    self.parked = False
+                    if watching:
+                        self.session = 'overlay'
+                        self._change('full', True)
+                    else:
+                        self.session = 'desk'
+                    activate = True
+                    continue
                 action = 'passive' if self.interactive and self.visible else 'full'
             if action == 'passive':
                 activate = False
@@ -215,21 +353,31 @@ class HudController:
         fg = self.native.foreground()
         own = self.native.owns(fg)
         in_game = bool(self.bounds and fg == self.game)
-        visible = bool(in_game or (self.interactive and (own or activate)))
-        bounds = self.bounds or self.native.work_area()
-        key = (self.mode, bounds)
+        if self.session == 'overlay' and not in_game and not own and not activate:
+            self.session = 'desk'
+            self.parked = True
+        if self.session == 'desk':
+            visible = not self.parked
+        else:
+            visible = bool(in_game or (self.interactive and (own or activate)))
+        frame = self.bounds if self.session == 'overlay' and self.bounds else self.native.work_area()
+        top = self.session == 'overlay'
+        key = (self.session, self.mode, frame)
         if key != self._layout_key:
             saved = dict(self.settings.get(self.mode) or {})
-            for source, target, start in [('dx','x',bounds[0]), ('dy','y',bounds[1])]:
+            for source, target, start in [('dx','x',frame[0]), ('dy','y',frame[1])]:
                 if type(saved.get(source)) is int:
                     saved[target] = start + saved[source]
-            default = (520, 380) if self.mode == 'compact' else (1280, 820)
-            minimum = (440, 340) if self.mode == 'compact' else (960, 640)
-            self.native.place(*fit_geometry(saved, bounds, default, minimum))
+            default = (1280, 820)
+            minimum = (960, 640)
+            self.native.place(*fit_geometry(saved, frame, default, minimum))
             self._layout_key = key
         if self._applied_interactive != self.interactive:
             self.native.set_interactive(self.interactive)
             self._applied_interactive = self.interactive
+        if self._applied_top != top and hasattr(self.native, 'set_top'):
+            self.native.set_top(top)
+            self._applied_top = top
         if visible != self.visible:
             self.native.show(visible)
             self.visible = visible

@@ -82,8 +82,10 @@ try:
     assert passive & 0x08000020 == 0x08000020, 'Toggle did not return click-through'
     report['toggle'] = True
     u.PostMessageW(hwnd[0],0x0010,0,0)
+    time.sleep(.8)
+    assert process.poll() is None, 'Окно должно остаться в трее, а не закрыть процесс'
+    process.terminate()
     process.wait(15)
-    assert process.returncode == 0, process.returncode
     deadline = time.monotonic()+3
     while not free_hotkey() and time.monotonic()<deadline: time.sleep(.1)
     assert free_hotkey(), 'Hotkey leaked after close'

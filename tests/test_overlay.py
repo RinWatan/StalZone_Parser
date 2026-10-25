@@ -22,6 +22,7 @@ class Native:
     def show(self, value): self.visible = value
     def place(self, *rect): self.rect = rect
     def activate(self): self.fg = 456
+    def set_top(self, value): self.top = value
     def return_to(self, hwnd): self.fg = hwnd
     def notify(self, text): self.message = text
 
@@ -46,12 +47,17 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(self.native.interactive)
         self.assertTrue(self.native.visible)
     def test_hotkey_gives_clicks_back_without_shrinking(self):
+        self.native.fg = 123
+        self.action('toggle')
+        self.assertEqual(self.hud.session, 'overlay')
+        self.assertTrue(self.native.interactive)
+        self.native.fg = 123
         self.action('toggle')
         self.assertEqual(self.hud.snapshot()['mode'], 'full')
         self.assertFalse(self.native.interactive)
         self.assertEqual(self.native.fg, 123)
+        self.native.fg = 123
         self.action('toggle')
-        self.assertEqual(self.hud.snapshot()['mode'], 'full')
         self.assertTrue(self.native.interactive)
     def test_collapse_command_stays_full(self):
         self.action('compact')
@@ -62,9 +68,11 @@ class OverlayTests(unittest.TestCase):
         self.native.fg = 789
         self.hud.tick()
         self.native.fg = 123
+        self.native.fg = 123
         self.action('toggle')
         self.assertEqual(self.hud.snapshot()['mode'], 'full')
     def test_last_queued_command_keeps_focus_in_game(self):
+        self.native.fg = 123
         self.action('toggle')
         self.hud.command('full')
         self.hud.command('passive')
@@ -72,14 +80,19 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(self.native.fg, 123)
         self.assertFalse(self.native.interactive)
     def test_alt_tab_hides_without_shrinking(self):
+        self.native.fg = 123
+        self.action('toggle')
         self.native.fg = 789
         self.hud.tick()
         self.assertFalse(self.native.visible)
-        self.assertTrue(self.native.interactive)
-        self.assertEqual(self.hud.snapshot()['mode'], 'full')
+        self.assertEqual(self.hud.session, 'desk')
         self.native.fg = 123
         self.hud.tick()
+        self.assertFalse(self.native.visible)
+        self.native.fg = 123
+        self.action('toggle')
         self.assertTrue(self.native.visible)
+        self.assertEqual(self.hud.session, 'overlay')
     def test_own_dialog_keeps_interaction(self):
         self.action('full')
         self.native.fg = 456
@@ -90,12 +103,14 @@ class OverlayTests(unittest.TestCase):
         self.native.game = None
         self.native.fg = 789
         self.hud.tick()
+        self.assertTrue(self.native.visible)
+        self.assertEqual(self.hud.session, 'desk')
+        self.action('close')
         self.assertFalse(self.native.visible)
+        self.native.fg = 123
         self.action('toggle')
         self.assertTrue(self.native.visible)
-        self.assertFalse(self.hud.snapshot()['game'])
-        self.action('passive')
-        self.assertFalse(self.native.visible)
+        self.assertEqual(self.hud.session, 'desk')
     def test_initial_launch_without_game_is_reachable(self):
         native = Native()
         native.game = None
@@ -106,25 +121,32 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(native.interactive)
         self.assertEqual(hud.snapshot()['mode'], 'full')
     def test_window_follows_game_without_resetting_drag(self):
-        self.native.rect = (100, 120, 520, 380)
+        self.native.fg = 123
+        self.action('toggle')
+        self.native.rect = (100, 120, 1280, 820)
         self.hud.tick()
         self.assertEqual(self.native.rect[:2], (100, 120))
         self.native.bounds = (300, 200, 1920, 1080)
         self.hud.tick()
         self.assertEqual(self.native.rect[:2], (400, 320))
     def test_position_saved_relative_to_game(self):
+        self.native.fg = 123
+        self.action('toggle')
         self.native.rect = (100, 120, 1280, 820)
         self.native.bounds = (0, 0, 1900, 1000)
         self.hud.tick()
         self.assertEqual(load_settings(self.path)['full']['dx'], 100)
-    def test_close_destroys_window(self):
+    def test_close_hides_to_tray_and_quit_destroys(self):
         self.action('close')
+        self.assertFalse(self.window.closed)
+        self.assertFalse(self.native.visible)
+        self.action('quit')
         self.assertTrue(self.window.closed)
-    def test_busy_hotkey_closes_unusable_second_copy(self):
-        with patch('stalzone_overlay.GlobalHotkey') as hotkey:
+    def test_busy_hotkey_keeps_the_window(self):
+        with patch('stalzone_overlay.GlobalHotkey') as hotkey, patch('stalzone_overlay.TrayIcon'):
             hotkey.return_value.registered = False
             self.hud.start()
-        self.assertTrue(self.window.closed)
+        self.assertFalse(self.window.closed)
         self.assertTrue(self.native.message)
     def test_native_close_saves_latest_drag(self):
         self.native.rect = (150, 160, 520, 380)
