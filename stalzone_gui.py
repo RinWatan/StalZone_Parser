@@ -1135,7 +1135,7 @@ PAGE = r"""<!DOCTYPE html>
   <header class="topbar pywebview-drag-region">
     <div class="brand">
       <button type="button" class="brand-mark" id="menu-toggle" aria-label="Открыть меню"><span>☢</span></button>
-      <strong>STALZONE</strong>
+      <strong>STALZONE</strong><em>Аукцион</em>
     </div>
     <div class="top-actions">
       <button class="primary-btn" id="run"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg> Прогон</button>
@@ -1333,7 +1333,7 @@ function paint(key) {
       ? `<td class="named">${gem(c, r.tag)}<span>${esc(c)}</span></td>`
       : `<td>${esc(c)}</td>`);
     const more = state.openRow === id
-      ? `<tr class="more"><td colspan="${Math.max(cols.length, 1)}"><button type="button" class="ingame" data-name="${esc(name)}">Найти в аукционе</button></td></tr>`
+      ? `<tr class="more"><td colspan="${Math.max(cols.length, 1)}"><button type="button" class="ingame" data-name="${esc(name)}">Найти на аукционе</button></td></tr>`
       : "";
     return `<tr class="${r.tag || ""}" data-id="${esc(id)}">${cells.join("")}</tr>${more}`;
   }).join("");
@@ -1374,7 +1374,7 @@ function paintBuys(box, rows, rule) {
     const check = r.deal
       ? `<span class="buy-check"><input type="checkbox" class="got" data-key="${esc(id)}"${bought ? " checked" : ""}><i><span>✓</span></i></span>`
       : "<span></span>";
-    const more = open ? `<div class="lot-more">${bits}<button type="button" class="ingame">Найти в аукционе</button></div>` : "";
+    const more = open ? `<div class="lot-more">${bits}<button type="button" class="ingame">Найти на аукционе</button></div>` : "";
     return `<div class="lot-wrap"><label class="lot-row ${bought ? "purchased" : ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${check}<span class="lot-name">${gem(r.cells[0], r.tag)}<span><strong>${esc(r.cells[0])}</strong><small>ROI ${esc(roiText || "—")}</small></span></span><span class="price">${esc(r.cells[4])}</span><span class="profit">${esc(r.cells[7])}<i><b style="width:${roi}%"></b></i></span><span class="hourly">${esc(r.cells[10] || "")}</span></label>${more}</div>`;
   }).join("");
   box.querySelectorAll(".lot-row").forEach(row => row.onclick = (event) => {
@@ -1504,7 +1504,7 @@ function paintBook() {
     return `<tr class="${frame}" data-buy="${esc(String(row.buy))}">
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
-      <td class="named">${gem(row.name, tag)}<span class="nm">${name}</span><button type="button" class="ingame" data-name="${esc(baseName(row.name))}" title="Найти в аукционе">Найти</button></td>
+      <td class="named">${gem(row.name, tag)}<span class="nm">${name}</span><button type="button" class="ingame" data-name="${esc(baseName(row.name))}">Найти на аукционе</button></td>
       <td><select class="qlt" data-id="${esc(row.id)}">${qltOptions}</select></td>
       <td><input class="ptn" data-id="${esc(row.id)}" value="${esc(row.ptn || "")}" placeholder="+0"></td>
       <td class="num">${buy}</td>
@@ -1620,12 +1620,12 @@ function build() {
         <div class="range"><input id="lo" value="0"/><input id="hi" value="15"/></div>
       </aside>
       <section class="results">
-        <div class="page-head"><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
+        <div class="page-head"><h2>Аукцион</h2><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
         <div id="items" class="result-list"></div>
       </section>
       <aside class="detail">
         <h2 id="detail-name">Лот</h2>
-        <button type="button" class="ingame" id="detail-find">Найти в аукционе</button>
+        <button type="button" class="ingame" id="detail-find">Найти на аукционе</button>
         <div id="lotinfo">Кликни предмет слева. Здесь будет цена, медиана и почему его брать или нет.</div>
         <div id="lotstats" title="Цена продажи делится на количество предметов. Каждая сделка имеет одинаковый вес. Учитываются выбранные редкость и заточка."></div>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
@@ -2176,7 +2176,7 @@ function show(key) {
     b.classList.toggle("on", b.dataset.key === key);
   });
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
-  if ($("screen-title")) $("screen-title").textContent = key === "auc" ? "" : (TAB_NAME[key] || {book:"Учёт", map:"Карта"}[key] || key);
+  if ($("screen-title")) $("screen-title").textContent = TAB_NAME[key] || {book:"Учёт", auc:"Аукцион", map:"Карта"}[key] || key;
   if (key === "auc" && !state.catalog.length) loadCatalog();
   if (key === "book") {
     loadBook();
