@@ -971,6 +971,7 @@ PAGE = r"""<!DOCTYPE html>
   .subscription-card strong { color: #d7ddd8; font-size: 14px; font-weight: 500; }
   .stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 15px 23px 16px 21px; }
   #screen-title { margin: 0; font-size: 36px; line-height: 1.2; font-weight: 600; color: #ebebec; letter-spacing: -.7px; }
+  #screen-title:empty { display: none; }
   .rule { height: 2px; margin: 7px 0 13px; background: #20282d; flex: 0 0 2px; }
   #stats { display: none; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 0; }
   body[data-screen="buys"] #stats { display: grid; }
@@ -1068,9 +1069,13 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox tr.tone-veteran { --frame: #c4a3ff; }
   #bookbox tr.tone-master { --frame: #e07a7a; }
   #bookbox tr.tone-legend { --frame: #e0b15a; }
-  #bookbox tr[class*="tone-"] td { border-top: 1px solid var(--frame); border-bottom: 1px solid var(--frame); }
-  #bookbox tr[class*="tone-"] td:first-child { border-left: 1px solid var(--frame); }
-  #bookbox tr[class*="tone-"] td:last-child { border-right: 1px solid var(--frame); }
+  #bookbox table { table-layout: fixed; width: 100%; }
+  #bookbox th, #bookbox td { overflow: hidden; text-overflow: ellipsis; }
+  #bookbox input, #bookbox select { width: 100%; min-width: 0; box-sizing: border-box; }
+  #bookbox td.named .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  #bookbox button.ingame, #bookbox button.drop { padding: 4px 8px; }
+  #bookbox tr[class*="tone-"] td { border-top: 0; border-left: 0; border-right: 0; border-bottom: 1px solid #242e33; }
+  #bookbox tr[class*="tone-"] td:first-child { box-shadow: inset 4px 0 0 var(--frame); }
   button.ingame { border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; padding: 6px 10px; }
   .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
   .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
@@ -1130,7 +1135,7 @@ PAGE = r"""<!DOCTYPE html>
   <header class="topbar pywebview-drag-region">
     <div class="brand">
       <button type="button" class="brand-mark" id="menu-toggle" aria-label="Открыть меню"><span>☢</span></button>
-      <strong>STALZONE</strong><em>Аукцион</em>
+      <strong>STALZONE</strong>
     </div>
     <div class="top-actions">
       <button class="primary-btn" id="run"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg> Прогон</button>
@@ -1499,7 +1504,7 @@ function paintBook() {
     return `<tr class="${frame}" data-buy="${esc(String(row.buy))}">
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
-      <td class="named">${gem(row.name, tag)}${name}</td>
+      <td class="named">${gem(row.name, tag)}<span class="nm">${name}</span><button type="button" class="ingame" data-name="${esc(baseName(row.name))}" title="Найти в аукционе">Найти</button></td>
       <td><select class="qlt" data-id="${esc(row.id)}">${qltOptions}</select></td>
       <td><input class="ptn" data-id="${esc(row.id)}" value="${esc(row.ptn || "")}" placeholder="+0"></td>
       <td class="num">${buy}</td>
@@ -1508,10 +1513,9 @@ function paintBook() {
       <td class="num net">${rubExact(row.net)}</td>
       <td class="num gain ${tone}">${rubExact(row.gain)}</td>
       <td><button type="button" class="drop" data-id="${esc(row.id)}">Убрать</button></td>
-      <td><button type="button" class="ingame" data-name="${esc(row.name)}">Найти в аукционе</button></td>
     </tr>`;
   }).join("");
-  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Редкость</th><th>Точка</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th><th></th></tr></thead><tbody>${body || '<tr><td colspan="12">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
+  box.innerHTML = `<table><colgroup><col style="width:36px"><col style="width:92px"><col><col style="width:132px"><col style="width:64px"><col style="width:108px"><col style="width:64px"><col style="width:108px"><col style="width:96px"><col style="width:88px"><col style="width:78px"></colgroup><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Редкость</th><th>Точка</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="11">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
   box.querySelectorAll("input.pickrow").forEach(input => input.onchange = () => {
     if (input.checked) state.picked.add(input.dataset.id);
     else state.picked.delete(input.dataset.id);
@@ -1616,11 +1620,12 @@ function build() {
         <div class="range"><input id="lo" value="0"/><input id="hi" value="15"/></div>
       </aside>
       <section class="results">
-        <div class="page-head"><h2>Аукцион</h2><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
+        <div class="page-head"><p class="found" id="found">Каталог грузится при открытии вкладки.</p></div>
         <div id="items" class="result-list"></div>
       </section>
       <aside class="detail">
         <h2 id="detail-name">Лот</h2>
+        <button type="button" class="ingame" id="detail-find">Найти в аукционе</button>
         <div id="lotinfo">Кликни предмет слева. Здесь будет цена, медиана и почему его брать или нет.</div>
         <div id="lotstats" title="Цена продажи делится на количество предметов. Каждая сделка имеет одинаковый вес. Учитываются выбранные редкость и заточка."></div>
         <div class="sub"><button class="on" id="now">Сейчас</button><button id="hist">История</button></div>
@@ -2171,7 +2176,7 @@ function show(key) {
     b.classList.toggle("on", b.dataset.key === key);
   });
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
-  if ($("screen-title")) $("screen-title").textContent = TAB_NAME[key] || {book:"Учёт", auc:"Аукцион", map:"Карта"}[key] || key;
+  if ($("screen-title")) $("screen-title").textContent = key === "auc" ? "" : (TAB_NAME[key] || {book:"Учёт", map:"Карта"}[key] || key);
   if (key === "auc" && !state.catalog.length) loadCatalog();
   if (key === "book") {
     loadBook();
@@ -2331,7 +2336,7 @@ async function openItem() {
   auctionLoading(true);
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
-  $("detail-name").innerHTML = `${gem(name, "", row && row.icon)}<span>${esc(name)}</span><button type="button" class="ingame" id="detail-find">Найти в аукционе</button>`;
+  $("detail-name").innerHTML = `${gem(name, "", row && row.icon)}<span>${esc(name)}</span>`;
   $("detail-find").onclick = () => pywebview.api.game_search(name);
   $("lotinfo").textContent = name + ": читаю лоты…";
   $("lotstats").textContent = "Считаю среднюю и медиану…";
