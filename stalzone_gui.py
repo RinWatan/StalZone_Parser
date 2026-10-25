@@ -1069,11 +1069,19 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox tr.tone-veteran { --frame: #c4a3ff; }
   #bookbox tr.tone-master { --frame: #e07a7a; }
   #bookbox tr.tone-legend { --frame: #e0b15a; }
-  #bookbox table { table-layout: fixed; width: 100%; }
-  #bookbox th, #bookbox td { overflow: hidden; text-overflow: ellipsis; }
-  #bookbox input, #bookbox select { width: 100%; min-width: 0; box-sizing: border-box; }
-  #bookbox td.named .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-  #bookbox button.ingame, #bookbox button.drop { padding: 4px 8px; }
+  #bookbox table { width: 100%; }
+  #bookbox th, #bookbox td { padding: 8px 6px; overflow: visible; }
+  #bookbox td.named { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; white-space: normal; min-width: 168px; }
+  #bookbox td.named .nmline { display: flex; align-items: center; gap: 8px; max-width: 220px; }
+  #bookbox td.named .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #bookbox select.qlt { width: 158px; }
+  #bookbox input.ptn { width: 58px; }
+  #bookbox input.qty { width: 56px; text-align: right; }
+  #bookbox input.sell { width: 108px; text-align: right; }
+  #bookbox input.buy, #bookbox input.name { width: 100%; min-width: 0; box-sizing: border-box; }
+  #bookbox button.ingame, #bookbox button.drop { padding: 4px 8px; white-space: nowrap; }
+  #ask-no, #ask-yes { border-radius: 8px; padding: 8px 14px; }
+  #ask-no { border: 1px solid #313b42; background: #10161a; color: #e9eaeb; }
   #bookbox tr[class*="tone-"] td { border-top: 0; border-left: 0; border-right: 0; border-bottom: 1px solid #242e33; }
   #bookbox tr[class*="tone-"] td:first-child { box-shadow: inset 4px 0 0 var(--frame); }
   button.ingame { border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; padding: 6px 10px; }
@@ -1504,7 +1512,7 @@ function paintBook() {
     return `<tr class="${frame}" data-buy="${esc(String(row.buy))}">
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
-      <td class="named">${gem(row.name, tag)}<span class="nm">${name}</span><button type="button" class="ingame" data-name="${esc(baseName(row.name))}">Найти на аукционе</button></td>
+      <td class="named"><span class="nmline">${gem(row.name, tag)}<span class="nm">${name}</span></span><button type="button" class="ingame" data-name="${esc(baseName(row.name))}">Найти на аукционе</button></td>
       <td><select class="qlt" data-id="${esc(row.id)}">${qltOptions}</select></td>
       <td><input class="ptn" data-id="${esc(row.id)}" value="${esc(row.ptn || "")}" placeholder="+0"></td>
       <td class="num">${buy}</td>
@@ -1515,7 +1523,7 @@ function paintBook() {
       <td><button type="button" class="drop" data-id="${esc(row.id)}">Убрать</button></td>
     </tr>`;
   }).join("");
-  box.innerHTML = `<table><colgroup><col style="width:36px"><col style="width:92px"><col><col style="width:132px"><col style="width:64px"><col style="width:108px"><col style="width:64px"><col style="width:108px"><col style="width:96px"><col style="width:88px"><col style="width:78px"></colgroup><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Редкость</th><th>Точка</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="11">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
+  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Редкость</th><th>Точка</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="11">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
   box.querySelectorAll("input.pickrow").forEach(input => input.onchange = () => {
     if (input.checked) state.picked.add(input.dataset.id);
     else state.picked.delete(input.dataset.id);
