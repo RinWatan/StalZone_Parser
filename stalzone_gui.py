@@ -177,7 +177,6 @@ class Bridge:
         self._search_lock = threading.Lock()
         self._catalog_busy = False
         self._catalog_payload = None
-        self._log_window = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -446,44 +445,6 @@ class Bridge:
 
     def hud_action(self, action):
         return self._hud.command(action) if self._hud else {'ok': False}
-
-    def open_log(self):
-        import webview
-        current = self._log_window
-        if current is not None:
-            try:
-                current.show()
-                return {"ok": True}
-            except Exception:
-                self._log_window = None
-        window = webview.create_window(
-            "STALZONE — лог",
-            html=LOG_PAGE,
-            js_api=self,
-            width=720,
-            height=560,
-            min_size=(480, 360),
-            frameless=True,
-            easy_drag=False,
-            on_top=True,
-            background_color="#080d11",
-        )
-        self._log_window = window
-        def forget():
-            if self._log_window is window:
-                self._log_window = None
-        window.events.closed += forget
-        return {"ok": True}
-
-    def close_log(self):
-        current = self._log_window
-        self._log_window = None
-        if current is not None:
-            try:
-                current.destroy()
-            except Exception:
-                pass
-        return {"ok": True}
 
     def boot(self):
         saved = "5000000"
@@ -905,57 +866,6 @@ class Bridge:
                 "stats": stats, "summary": summary}
 
 
-LOG_PAGE = r"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="utf-8"/>
-<title>STALZONE — лог</title>
-<style>
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #080d11; color: #d6d8da; font: 14px/1.45 "Segoe UI", Arial, sans-serif; }
-  body { display: flex; flex-direction: column; }
-  header { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid #263039; background: rgba(12,18,22,.95); }
-  .mark { width: 34px; height: 34px; display: grid; place-items: center; color: #09100b; background: linear-gradient(135deg,#66db58,#38aa35); font-size: 22px; }
-  strong { color: #55cf4d; font-size: 18px; }
-  em { color: #b4b7ba; font-style: normal; font-size: 16px; }
-  .state { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #aeb2b5; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: #55cf4d; }
-  button { width: 36px; height: 36px; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; cursor: pointer; }
-  main { flex: 1; min-height: 0; margin: 14px; overflow: auto; border: 1px solid #273037; border-radius: 11px; background: rgba(18,24,28,.62); padding: 10px 16px; }
-  p { margin: 0; line-height: 26px; color: #b8bdc0; }
-  mark { color: #5ed257; background: none; }
-</style>
-</head>
-<body>
-<header class="pywebview-drag-region">
-  <span class="mark">☢</span>
-  <strong>STALZONE</strong>
-  <em>Лог</em>
-  <span class="state"><i class="dot"></i> <span id="state">Онлайн</span></span>
-  <button id="close" type="button" aria-label="Закрыть">×</button>
-</header>
-<main id="lines"></main>
-<script>
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&','<':'<','>':'>','"':'"'}[c]));
-async function paint() {
-  const data = await pywebview.api.poll();
-  document.getElementById("state").textContent = data.busy ? "В работе" : "Онлайн";
-  const lines = data.logs || [];
-  const box = document.getElementById("lines");
-  const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  box.innerHTML = lines.map(line => `<p>${esc(line).replace(/OK/g, "<mark>OK</mark>")}</p>`).join("") || "<p><mark>Ожидание следующего прогона...</mark></p>";
-  if (nearEnd) box.scrollTop = box.scrollHeight;
-}
-window.addEventListener("pywebviewready", () => {
-  document.getElementById("close").onclick = () => pywebview.api.close_log();
-  paint();
-  setInterval(paint, 400);
-});
-</script>
-</body>
-</html>
-"""
-
 PAGE = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1163,6 +1073,18 @@ PAGE = r"""<!DOCTYPE html>
   #mapbar button.on, #maplayers button.on { background: var(--green); color: #071009; }
   #mapq { width: 180px; text-align: left; }
   #wikimap { flex: 1; min-height: 0; background: #0e0c0a; }
+  #logwin { position: fixed; z-index: 4000; inset: 74px 0 0 0; display: none; align-items: center; justify-content: center; pointer-events: none; }
+  #logwin.on { display: flex; }
+  .logwin { pointer-events: auto; width: min(760px, calc(100% - 48px)); height: min(560px, calc(100% - 36px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #273037; border-radius: 12px; background: #0c1216; box-shadow: 0 22px 60px #000c; }
+  .logwin header { height: 58px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid #263039; background: rgba(12,18,22,.98); }
+  .logwin .mark { width: 32px; height: 32px; display: grid; place-items: center; color: #09100b; background: linear-gradient(135deg,#66db58,#38aa35); font-size: 20px; }
+  .logwin strong { color: var(--green); font-size: 16px; }
+  .logwin em { color: #b4b7ba; font-style: normal; }
+  .logwin .state { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #aeb2b5; font-size: 13px; }
+  .logwin button { width: 36px; height: 36px; padding: 0; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; line-height: 1; }
+  .logwin .log-lines { flex: 1; min-height: 0; overflow: auto; padding: 8px 16px 14px; color: #b8bdc0; font-size: 14px; line-height: 26px; }
+  .logwin .log-lines p { margin: 0; }
+  .logwin mark { color: #5ed257; background: none; }
   @media (max-width: 1100px) {
     .brand em, .topbar svg { display: none; }
     .stat b { font-size: 22px; }
@@ -1213,6 +1135,18 @@ PAGE = r"""<!DOCTYPE html>
     </section>
     <div id="main"></div>
   </div>
+</div>
+<div id="logwin">
+  <section class="logwin" role="dialog" aria-label="Лог">
+    <header>
+      <span class="mark">☢</span>
+      <strong>STALZONE</strong>
+      <em>Лог</em>
+      <span class="state"><i class="dot"></i> <em id="log-state">Онлайн</em></span>
+      <button id="log-close" type="button" aria-label="Закрыть лог">×</button>
+    </header>
+    <div class="log-lines" id="log"></div>
+  </section>
 </div>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
@@ -1604,7 +1538,10 @@ function build() {
   main.appendChild(view);
   tabs.appendChild(tabButton("map", "Карта", false));
   const logBtn = tabButton("log", "Лог", false);
-  logBtn.onclick = () => pywebview.api.open_log();
+  logBtn.onclick = () => {
+    const open = $("logwin").classList.toggle("on");
+    logBtn.classList.toggle("on", open);
+  };
   tabs.appendChild(logBtn);
   const mapView = document.createElement("div");
   mapView.className = "view";
@@ -2136,7 +2073,10 @@ function paintLunar() {
 
 function show(key) {
   document.body.dataset.screen = key;
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
+  document.querySelectorAll(".tabs button").forEach(b => {
+    if (b.dataset.key === "log") return;
+    b.classList.toggle("on", b.dataset.key === key);
+  });
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
   if ($("screen-title")) $("screen-title").textContent = TAB_NAME[key] || {book:"Учёт", auc:"Аукцион", map:"Карта"}[key] || key;
   if (key === "auc" && !state.catalog.length) loadCatalog();
@@ -2349,6 +2289,15 @@ async function tick() {
     $("stat-live").textContent = data.busy ? "скан" : "ждёт";
   }
   if (data.catalog) applyCatalog(data.catalog);
+  if ($("logwin").classList.contains("on")) {
+    const lines = data.logs || [];
+    const box = $("log");
+    const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    box.innerHTML = lines.map(line => `<p>${esc(line).replace(/OK/g, "<mark>OK</mark>")}</p>`).join("")
+      || `<p><mark>${data.busy ? "Прогон запущен, поиск лотов..." : "Ожидание следующего прогона..."}</mark></p>`;
+    if (nearEnd) box.scrollTop = box.scrollHeight;
+    $("log-state").textContent = short;
+  }
   ["run","auto","live","mins","budget"].forEach(id => $(id).disabled = !!data.busy);
   $("stop").disabled = !data.busy;
   if (data.rev !== state.rev) {
@@ -2369,6 +2318,11 @@ window.addEventListener("pywebviewready", async () => {
   await loadBook();
   wire();
   $("closehud").onclick = () => pywebview.api.hud_action("close");
+  $("log-close").onclick = () => {
+    $("logwin").classList.remove("on");
+    const logBtn = document.querySelector('#tabs button[data-key="log"]');
+    if (logBtn) logBtn.classList.remove("on");
+  };
   $("menu-toggle").onclick = () => {
     const shell = $("full");
     const open = shell.classList.toggle("menu-open");
@@ -2409,7 +2363,6 @@ def main():
     window.events.loaded += hud.start
     def closing():
         agent.HALT.set()
-        bridge.close_log()
         hud.closing()
     window.events.closing += closing
     window.events.closed += hud.stop
