@@ -166,14 +166,17 @@ class GameWindow:
         old = self.u.GetWindowLongPtrW(hwnd, -20)
         self.u.SetWindowLongPtrW(hwnd, -20, overlay_style(old, value))
         self.u.SetLayeredWindowAttributes(hwnd, 0, 248 if value else 224, 2)
-        self.u.SetWindowPos(hwnd, w.HWND(-1), 0, 0, 0, 0, 0x0033)
+        self.u.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0037)
+
+    def set_top(self, top):
+        self.u.SetWindowPos(self.hwnd, w.HWND(-1 if top else -2), 0, 0, 0, 0, 0x0013)
 
     def show(self, visible):
         # SW_SHOWNOACTIVATE avoids stealing the game's keyboard focus.
         self.u.ShowWindow(self.hwnd, 4 if visible else 0)
 
     def place(self, x, y, width, height):
-        self.u.SetWindowPos(self.hwnd, w.HWND(-1), x, y, width, height, 0x0010)
+        self.u.SetWindowPos(self.hwnd, None, x, y, width, height, 0x0014)
 
     def activate(self):
         self.u.SetForegroundWindow(self.hwnd)

@@ -1102,6 +1102,14 @@ PAGE = r"""<!DOCTYPE html>
   #q { width: 100%; text-align: left; }
   #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, .72); align-items: center; justify-content: center; }
   #ask.on { display: flex; }
+  #splash { position: fixed; inset: 0; z-index: 6000; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #080d11; }
+  #splash.on { display: flex; }
+  #splash.off { opacity: 0; pointer-events: none; transition: opacity .35s ease; }
+  #splash .brand-mark { width: 84px; height: 84px; }
+  #splash strong { color: #48ed61; font: 800 22px Arial, sans-serif; letter-spacing: .14em; }
+  .splash-bar { width: 168px; height: 3px; overflow: hidden; border-radius: 3px; background: #1c262c; }
+  .splash-bar i { display: block; width: 40%; height: 100%; background: #45df61; animation: splash-run 1.1s ease-in-out infinite; }
+  @keyframes splash-run { from { transform: translateX(-130%); } to { transform: translateX(340%); } }
   #license { display: none; position: fixed; inset: 0; z-index: 4500; background: #080d11; align-items: center; justify-content: center; }
   #license.on { display: flex; }
   .lic-card { position: relative; width: min(440px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 12px; background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 20px 18px 16px; }
@@ -1237,6 +1245,7 @@ PAGE = r"""<!DOCTYPE html>
 </head>
 <body data-screen="buys" class="full">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
+<div id="splash" class="on"><div class="brand-mark"></div><strong>STALZONE</strong><span class="splash-bar"><i></i></span></div>
 <div id="license" class="on"><form class="lic-card" onsubmit="return false"><button type="button" id="license-close" aria-label="Закрыть">×</button><strong>STALZONE</strong><p>Без ключа приложение не открывается. Вставь его здесь. Ключ запоминается за этим ПК. Отключить подписку можно уже внутри, доступ снова закроется.</p><input id="license-key" placeholder="Ключ" autocomplete="off"/><button type="button" class="gold" id="license-go">Открыть</button><small id="license-msg"></small></form></div>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
@@ -2622,6 +2631,8 @@ window.addEventListener("pywebviewready", async () => {
   state.columns = boot.columns;
   rememberItems(boot.icons || []);
   paintLicense(boot.license);
+  const splash = $("splash");
+  if (splash) setTimeout(() => { splash.classList.add("off"); setTimeout(() => splash.remove(), 400); }, 1200);
   $("license-go").onclick = async () => {
     const res = await pywebview.api.license_activate($("license-key").value);
     paintLicense(res);
@@ -2680,15 +2691,19 @@ def main():
     from stalzone_overlay import HudController
     bridge = Bridge()
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
-    window = webview.create_window("STALZONE — карта и оверлей", html=PAGE, js_api=bridge,
+    window = webview.create_window("STALZONE", html=PAGE, js_api=bridge,
         width=1280, height=820, min_size=(960, 640), frameless=True,
-        easy_drag=False, on_top=True, hidden=True, background_color='#080d11')
+        easy_drag=False, on_top=False, hidden=True, background_color='#080d11')
     hud = HudController(window, folder / 'overlay_settings.json')
     bridge._hud = hud
     window.events.loaded += hud.start
     def closing():
-        agent.HALT.set()
-        hud.closing()
+        if hud.quit_requested:
+            agent.HALT.set()
+            hud.closing()
+            return True
+        hud.command('close')
+        return False
     window.events.closing += closing
     window.events.closed += hud.stop
     webview.start(gui='edgechromium')
