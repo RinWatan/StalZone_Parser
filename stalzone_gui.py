@@ -10,6 +10,7 @@ from pathlib import Path
 import stalzone_agent as agent
 import stalzone_db
 import stalzone_ledger as book
+import stalzone_license as lic
 import stalzone_lunar as lunar
 import stalzone_pda as pda
 
@@ -463,6 +464,7 @@ class Bridge:
             "qlt": ["Все", *agent.QLT],
             "columns": TABLES,
             "icons": stalzone_db.appearance(agent.DIR / "items.db"),
+            "license": lic.status(),
         }
 
     def poll(self):
@@ -478,6 +480,7 @@ class Bridge:
                 "compact": list(self._compact),
                 "catalog": catalog,
                 "hud": self._hud.snapshot() if self._hud else {},
+                "license": lic.status(),
             }
 
     def _budget(self, text):
@@ -499,7 +502,20 @@ class Bridge:
         with self._launch_lock:
             return self._start_run(auto, minutes, budget, section)
 
+    def license_activate(self, key):
+        result = lic.activate(key)
+        if result.get("active"):
+            who = "владелец, безлимит" if result.get("role") == "owner" else f"{result.get('days_left')} дн."
+            self.note("Подписка открыта: " + who)
+        else:
+            self.note(result.get("reason") or "Ключ не подошёл")
+        return result
+
     def _start_run(self, auto, minutes, budget, section):
+        seat = lic.status()
+        if not seat.get("active"):
+            self.note(seat.get("reason") or "Нужен ключ подписки")
+            return {"ok": False, "error": seat.get("reason") or "Нужен ключ подписки"}
         if self.worker and self.worker.is_alive():
             return {"ok": False, "error": "Уже идёт"}
         try:
@@ -551,6 +567,10 @@ class Bridge:
             return self._start_live(budget)
 
     def _start_live(self, budget):
+        seat = lic.status()
+        if not seat.get("active"):
+            self.note(seat.get("reason") or "Нужен ключ подписки")
+            return {"ok": False, "error": seat.get("reason") or "Нужен ключ подписки"}
         items = [i for i in self.auction if i["id"] in self.fav][:25]
         if not items and self.watch:
             by_id = {i["id"]: i for i in self.auction}
@@ -1076,6 +1096,13 @@ PAGE = r"""<!DOCTYPE html>
   #q { width: 100%; text-align: left; }
   #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, .72); align-items: center; justify-content: center; }
   #ask.on { display: flex; }
+  #license { display: none; position: fixed; inset: 0; z-index: 4500; background: rgba(6, 8, 7, .82); align-items: center; justify-content: center; }
+  #license.on { display: flex; }
+  .lic-card { width: min(440px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 12px; background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 20px 18px 16px; }
+  .lic-card strong { color: #48ed61; font-size: 20px; }
+  .lic-card p, .lic-card small { margin: 0; color: #9aa3a8; }
+  .lic-card input { width: 100%; text-align: left; }
+  #license-msg { min-height: 18px; color: #e07a7a; }
   .ask-card { width: min(420px, calc(100% - 32px)); background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 18px 18px 14px; }
   .ask-card p { margin: 0 0 16px; }
   .ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -1202,6 +1229,7 @@ PAGE = r"""<!DOCTYPE html>
 </head>
 <body data-screen="buys" class="full">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
+<div id="license"><form class="lic-card" onsubmit="return false"><strong>STALZONE</strong><p>Вставь ключ. Он запомнится за этим ПК и его адресом. Обычный ключ открывает срок с сегодняшнего дня, ключ владельца без срока.</p><input id="license-key" placeholder="Ключ" autocomplete="off"/><button type="button" class="gold" id="license-go">Открыть</button><small id="license-msg"></small></form></div>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
     <div class="brand">
@@ -1228,7 +1256,7 @@ PAGE = r"""<!DOCTYPE html>
     <nav class="tabs" id="tabs"></nav>
     <div class="subscription-card">
       <div class="subscription-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></div>
-      <div><small>Подписка</small><strong id="side-status">истекает через:</strong></div>
+      <div><small>Подписка</small><strong id="side-status">нет ключа</strong></div>
     </div>
   </aside>
   <div class="stage">
@@ -2258,6 +2286,19 @@ function paintLunar() {
   $("mapstatus").textContent = text;
 }
 
+function paintLicense(lic) {
+  const seat = lic || {};
+  const box = $("license");
+  const side = $("side-status");
+  if (!seat.active) {
+    if (box) box.classList.add("on");
+    if (side) side.textContent = seat.reason || "нет ключа";
+    return;
+  }
+  if (box) box.classList.remove("on");
+  if (side) side.textContent = seat.role === "owner" ? "владелец · безлимит" : ("истекает через: " + seat.days_left + " дн.");
+}
+
 function show(key) {
   document.body.dataset.screen = key;
   document.querySelectorAll(".tabs button").forEach(b => {
@@ -2549,7 +2590,7 @@ async function tick() {
     $("stat-budget").textContent = budgetText;
     $("stat-live").textContent = data.busy ? "скан" : "ждёт";
   }
-  if (data.catalog) applyCatalog(data.catalog);
+  if (data.license) paintLicense(data.license);
   if ($("logwin").classList.contains("on")) {
     const lines = data.logs || [];
     const box = $("log");
@@ -2572,6 +2613,13 @@ window.addEventListener("pywebviewready", async () => {
   const boot = await pywebview.api.boot();
   state.columns = boot.columns;
   rememberItems(boot.icons || []);
+  paintLicense(boot.license);
+  $("license-go").onclick = async () => {
+    const res = await pywebview.api.license_activate($("license-key").value);
+    paintLicense(res);
+    const msg = $("license-msg");
+    if (msg) msg.textContent = res && res.active ? "" : ((res && res.reason) || "Ключ не подошёл");
+  };
   $("budget").value = prettyMoney(boot.budget);
   build();
   $("cat").innerHTML = boot.cats.map(c => `<option value="${esc(c.key)}">${esc(c.title)}</option>`).join("");

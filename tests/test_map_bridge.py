@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 import stalzone_agent as agent
+import stalzone_license as lic
 from stalzone_gui import Bridge
 
 class BridgeTests(unittest.TestCase):
@@ -12,6 +13,7 @@ class BridgeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.patcher = patch.object(agent, 'DIR', Path(self.temp.name))
         self.patcher.start()
+        lic.activate(lic.issue_owner(), self.temp.name, ip="127.0.0.1")
         self.bridge = Bridge()
     def tearDown(self):
         self.patcher.stop()
