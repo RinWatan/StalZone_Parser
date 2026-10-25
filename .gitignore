@@ -9,6 +9,9 @@ __pycache__/
 *.log
 *.spec
 catalog.json
+items.db
+items.db-wal
+items.db-shm
 not_on_auction.json
 quiet_lots.json
 sell_cache.json

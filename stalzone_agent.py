@@ -15,6 +15,8 @@ from pathlib import Path
 
 import httpx
 
+import stalzone_db
+
 
 def app_dir():
     if getattr(sys, "frozen", False):
@@ -561,7 +563,7 @@ def auction_listing(force=False, status=None):
             return _LISTING
     items = _load_catalog(force, status)
     off = _off_auction()
-    items = [item for item in items if item["id"] not in off]
+    items = [item for item in items if item.get("tradable", 1) and item["id"] not in off]
     with _LISTING_LOCK:
         _LISTING = items
     return items
@@ -577,21 +579,28 @@ def _load_catalog(force=False, status=None):
     path = DIR / "catalog.json"
     fresh = path.exists() and time.time() - path.stat().st_mtime < 3 * 86400
     if fresh and not force:
-        return json.loads(path.read_text(encoding="utf-8"))
+        items = json.loads(path.read_text(encoding="utf-8"))
+        _sync_items(items)
+        return _auction_rows(items)
     try:
         items = _catalog_from_exbo(status)
     except Exception:
         if path.exists():
             _tell(status, "База EXBO не скачалась, беру прошлый каталог")
-            return json.loads(path.read_text(encoding="utf-8"))
+            items = json.loads(path.read_text(encoding="utf-8"))
+            _sync_items(items)
+            return _auction_rows(items)
         raise
     if not items:
         if path.exists():
             path.touch()
-            return json.loads(path.read_text(encoding="utf-8"))
+            items = json.loads(path.read_text(encoding="utf-8"))
+            _sync_items(items)
+            return _auction_rows(items)
         raise RuntimeError("База предметов пустая")
     path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
-    return items
+    _sync_items(items)
+    return _auction_rows(items)
 
 
 def _catalog_from_exbo(status=None):
@@ -655,6 +664,19 @@ def _listing_from(url, status=None):
     return items
 
 
+def _auction_rows(items):
+    return [item for item in items or [] if item.get("tradable", 1)]
+
+
+def _sync_items(items):
+    if not items:
+        return
+    try:
+        stalzone_db.sync_items(DIR / "items.db", items)
+    except Exception as exc:
+        log(f"база предметов: {exc}")
+
+
 def _items_in_listing(rows):
     found = {}
     for row in rows or []:
@@ -668,7 +690,8 @@ def _items_in_listing(rows):
         item = _item_row(stem, parts[parts.index("items") + 1], row)
         if item:
             found[item["id"]] = item
-    return _sorted_items(found)
+    _sync_items(list(found.values()))
+    return _sorted_items({key: item for key, item in found.items() if item.get("tradable", 1)})
 
 
 def _catalog_from_zip(status=None):
@@ -711,20 +734,38 @@ def _items_in_zip(path):
                 cat = parts[parts.index("items") + 1]
             except ValueError:
                 continue
-            item = _item_row(data.get("id") or stem, cat, data)
+            icon = ""
+            if "/items/" in name:
+                icon = "/icons/" + name.split("/items/", 1)[1].rsplit(".", 1)[0] + ".png"
+            item = _item_row(data.get("id") or stem, cat, data, icon)
             if item:
                 found[item["id"]] = item
-    return _sorted_items(found)
+    _sync_items(list(found.values()))
+    return _sorted_items({key: item for key, item in found.items() if item.get("tradable", 1)})
 
 
-def _item_row(item_id, cat, data):
+def _item_row(item_id, cat, data, icon=""):
     item_id = str(item_id or "")
     if not item_id or item_id.isdigit():
         return None
-    if data.get("color") == "QUEST_ITEM":
-        return None
+    status = data.get("status")
+    if isinstance(status, dict):
+        status = str(status.get("state") or "")
+    else:
+        status = str(status or "")
     title = ((data.get("name") or {}).get("lines") or {}).get("ru") or item_id
-    return {"id": item_id, "name": title, "cat": cat, "color": data.get("color") or "DEFAULT"}
+    row = {
+        "id": item_id,
+        "name": title,
+        "cat": cat,
+        "color": data.get("color") or "DEFAULT",
+        "icon": str(data.get("icon") or icon or ""),
+        "status": status,
+    }
+    tradable, reason = stalzone_db.classify(row)
+    row["tradable"] = tradable
+    row["reason"] = reason
+    return row
 
 
 def _sorted_items(found):
@@ -735,12 +776,16 @@ def _sorted_items(found):
 
 
 def _off_auction():
-    """Предметы, у которых EXBO не показывает ни лотов, ни истории продаж."""
+    """Предметы, которые нельзя купить или продать, и те, кого аукцион не знает."""
     now = time.time()
     fresh = set()
     for slug, ts in _off_map().items():
         if now - ts < 14 * 86400:
             fresh.add(slug)
+    try:
+        fresh.update(stalzone_db.untradable_ids(DIR / "items.db"))
+    except Exception:
+        pass
     return fresh
 
 
@@ -770,6 +815,10 @@ def _remember_off(slug):
         (DIR / "not_on_auction.json").write_text(
             json.dumps(book, ensure_ascii=False), encoding="utf-8"
         )
+    try:
+        stalzone_db.mark_untradable(DIR / "items.db", slug, "auction")
+    except Exception:
+        pass
     with _LISTING_LOCK:
         _LISTING = None
 
@@ -1675,10 +1724,14 @@ def _buy_one(item):
         _note_exits(slug, book)
         return find_flips(book, slug, name, allow_single=single)
     except httpx.HTTPStatusError as error:
-        if error.response.status_code == 429:
+        code = error.response.status_code
+        if code == 404:
+            _remember_off(slug)
+            log(f"{name}: на аукционе этого предмета нет")
+        elif code == 429:
             log(f"{name}: лимит запросов, предмет пропущен")
         else:
-            log(f"{name}: ошибка {error.response.status_code}")
+            log(f"{name}: ошибка {code}")
         return []
     except Exception as e:
         log(f"{name}: {e}")
