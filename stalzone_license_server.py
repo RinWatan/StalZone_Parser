@@ -14,8 +14,6 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import stalzone_license as lic
-
 
 def folder():
     if getattr(sys, "frozen", False):
@@ -23,16 +21,47 @@ def folder():
     return Path(__file__).resolve().parent
 
 
+def _find_license_module():
+    here = folder()
+    for candidate in [here, *here.parents]:
+        if (candidate / "stalzone_license.py").exists():
+            text = str(candidate)
+            if text not in sys.path:
+                sys.path.insert(0, text)
+            return
+    raise SystemExit(
+        "Рядом с сервером нет stalzone_license.py. "
+        "Запускай python stalzone_license_server.py из папки, где лежит весь проект, "
+        "а не из отдельной папки Сервер."
+    )
+
+
+_find_license_module()
+import stalzone_license as lic
+
+
 def load_config():
     path = folder() / "license_server.json"
+    if not path.exists():
+        raise SystemExit(
+            "Рядом с сервером нет license_server.json.\n"
+            "Создай его в этой же папке, с кавычками:\n"
+            '{\n  "token": "токен из BotFather",\n  "port": 8787\n}'
+        )
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = None
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except ValueError:
+        raise SystemExit(
+            "license_server.json записан не как JSON. Кавычки и двоеточия обязательны:\n"
+            '{\n  "token": "токен из BotFather",\n  "port": 8787\n}'
+        )
     if not isinstance(data, dict) or not str(data.get("token") or "").strip():
-        raise SystemExit("Рядом с сервером нет license_server.json с полем token.")
+        raise SystemExit('В license_server.json нет поля "token".')
     data["token"] = str(data["token"]).strip()
-    data["port"] = int(data.get("port") or 8787)
+    try:
+        data["port"] = int(data.get("port") or 8787)
+    except (TypeError, ValueError):
+        raise SystemExit('Поле "port" должно быть числом, например 8787.')
     return data
 
 
