@@ -15,6 +15,8 @@ import stalzone_agent as agent
 
 _SECRET = b"stalzone-seat-v1-7c4e9a1b"
 DAY = 86400
+# Сюда ставится страница оплаты. Пока пусто, кнопка скажет, что ссылки ещё нет.
+BUY_URL = ""
 
 
 def _b64(raw):

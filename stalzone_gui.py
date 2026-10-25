@@ -517,6 +517,14 @@ class Bridge:
         self.note("Подписка отключена")
         return result
 
+    def license_buy(self):
+        url = (lic.BUY_URL or "").strip()
+        if not url:
+            return {"ok": False, "reason": "Ссылка на покупку ещё не задана"}
+        import webbrowser
+        webbrowser.open(url)
+        return {"ok": True}
+
     def _start_run(self, auto, minutes, budget, section):
         seat = lic.status()
         if not seat.get("active"):
@@ -1102,20 +1110,15 @@ PAGE = r"""<!DOCTYPE html>
   #q { width: 100%; text-align: left; }
   #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, .72); align-items: center; justify-content: center; }
   #ask.on { display: flex; }
-  #splash { position: fixed; inset: 0; z-index: 6000; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #080d11; }
-  #splash.on { display: flex; }
-  #splash.off { opacity: 0; pointer-events: none; transition: opacity .35s ease; }
-  #splash .brand-mark { width: 84px; height: 84px; }
-  #splash strong { color: #48ed61; font: 800 22px Arial, sans-serif; letter-spacing: .14em; }
-  .splash-bar { width: 168px; height: 3px; overflow: hidden; border-radius: 3px; background: #1c262c; }
-  .splash-bar i { display: block; width: 40%; height: 100%; background: #45df61; animation: splash-run 1.1s ease-in-out infinite; }
-  @keyframes splash-run { from { transform: translateX(-130%); } to { transform: translateX(340%); } }
   #license { display: none; position: fixed; inset: 0; z-index: 4500; background: #080d11; align-items: center; justify-content: center; }
   #license.on { display: flex; }
-  .lic-card { position: relative; width: min(440px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 12px; background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 20px 18px 16px; }
-  .lic-card strong { color: #48ed61; font-size: 20px; }
-  .lic-card p, .lic-card small { margin: 0; color: #9aa3a8; }
-  .lic-card input { width: 100%; text-align: left; }
+  .lic-card { position: relative; width: min(380px, calc(100% - 32px)); display: flex; flex-direction: column; align-items: center; gap: 12px; background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 28px 22px 20px; }
+  .lic-card .brand-mark { width: 84px; height: 84px; }
+  .lic-card strong { color: #48ed61; font: 800 22px Arial, sans-serif; letter-spacing: .14em; }
+  .lic-card p, .lic-card small { margin: 0; color: #9aa3a8; text-align: center; }
+  .lic-card input, #license-go, #license-buy { width: 100%; }
+  #license-go { height: 44px; }
+  #license-buy { height: 40px; border: 1px solid #303941; border-radius: 9px; background: #12191e; color: #e9eaeb; }
   #license-msg { min-height: 18px; color: #e07a7a; }
   #license-close { position: absolute; top: 12px; right: 12px; width: 36px; height: 36px; padding: 0; border: 1px solid #303941; border-radius: 9px; background: #12191e; color: #e9eaeb; font-size: 22px; line-height: 1; }
   #license-off { margin-top: 8px; height: 28px; padding: 0 10px; border: 1px solid #303941; border-radius: 8px; background: #12191e; color: #e9eaeb; }
@@ -1245,8 +1248,7 @@ PAGE = r"""<!DOCTYPE html>
 </head>
 <body data-screen="buys" class="full">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
-<div id="splash" class="on"><div class="brand-mark"></div><strong>STALZONE</strong><span class="splash-bar"><i></i></span></div>
-<div id="license" class="on"><form class="lic-card" onsubmit="return false"><button type="button" id="license-close" aria-label="Закрыть">×</button><strong>STALZONE</strong><p>Без ключа приложение не открывается. Вставь его здесь. Ключ запоминается за этим ПК. Отключить подписку можно уже внутри, доступ снова закроется.</p><input id="license-key" placeholder="Ключ" autocomplete="off"/><button type="button" class="gold" id="license-go">Открыть</button><small id="license-msg"></small></form></div>
+<div id="license" class="on"><form class="lic-card" onsubmit="return false"><button type="button" id="license-close" aria-label="Закрыть">×</button><div class="brand-mark"></div><strong>STALZONE</strong><input id="license-key" placeholder="Ключ" autocomplete="off"/><button type="button" class="gold" id="license-go">Войти</button><button type="button" id="license-buy">Купить подписку</button><small id="license-msg"></small></form></div>
 <div id="full" class="app-shell menu-open">
   <header class="topbar pywebview-drag-region">
     <div class="brand">
@@ -2631,13 +2633,19 @@ window.addEventListener("pywebviewready", async () => {
   state.columns = boot.columns;
   rememberItems(boot.icons || []);
   paintLicense(boot.license);
-  const splash = $("splash");
-  if (splash) setTimeout(() => { splash.classList.add("off"); setTimeout(() => splash.remove(), 400); }, 1200);
   $("license-go").onclick = async () => {
     const res = await pywebview.api.license_activate($("license-key").value);
     paintLicense(res);
     const msg = $("license-msg");
     if (msg) msg.textContent = res && res.active ? "" : ((res && res.reason) || "Ключ не подошёл");
+  };
+  $("license-key").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") $("license-go").click();
+  });
+  $("license-buy").onclick = async () => {
+    const res = await pywebview.api.license_buy();
+    const msg = $("license-msg");
+    if (msg) msg.textContent = res && res.ok ? "" : ((res && res.reason) || "Не удалось открыть оплату");
   };
   $("license-off").onclick = async () => {
     const res = await pywebview.api.license_drop();
