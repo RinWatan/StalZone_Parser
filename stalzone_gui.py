@@ -177,6 +177,7 @@ class Bridge:
         self._search_lock = threading.Lock()
         self._catalog_busy = False
         self._catalog_payload = None
+        self._log_window = None
 
     def wiki_map(self, slug):
         slug = str(slug or "").strip()
@@ -445,6 +446,44 @@ class Bridge:
 
     def hud_action(self, action):
         return self._hud.command(action) if self._hud else {'ok': False}
+
+    def open_log(self):
+        import webview
+        current = self._log_window
+        if current is not None:
+            try:
+                current.show()
+                return {"ok": True}
+            except Exception:
+                self._log_window = None
+        window = webview.create_window(
+            "STALZONE — лог",
+            html=LOG_PAGE,
+            js_api=self,
+            width=720,
+            height=560,
+            min_size=(480, 360),
+            frameless=True,
+            easy_drag=False,
+            on_top=True,
+            background_color="#080d11",
+        )
+        self._log_window = window
+        def forget():
+            if self._log_window is window:
+                self._log_window = None
+        window.events.closed += forget
+        return {"ok": True}
+
+    def close_log(self):
+        current = self._log_window
+        self._log_window = None
+        if current is not None:
+            try:
+                current.destroy()
+            except Exception:
+                pass
+        return {"ok": True}
 
     def boot(self):
         saved = "5000000"
@@ -866,6 +905,57 @@ class Bridge:
                 "stats": stats, "summary": summary}
 
 
+LOG_PAGE = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<title>STALZONE — лог</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #080d11; color: #d6d8da; font: 14px/1.45 "Segoe UI", Arial, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid #263039; background: rgba(12,18,22,.95); }
+  .mark { width: 34px; height: 34px; display: grid; place-items: center; color: #09100b; background: linear-gradient(135deg,#66db58,#38aa35); font-size: 22px; }
+  strong { color: #55cf4d; font-size: 18px; }
+  em { color: #b4b7ba; font-style: normal; font-size: 16px; }
+  .state { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #aeb2b5; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #55cf4d; }
+  button { width: 36px; height: 36px; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; cursor: pointer; }
+  main { flex: 1; min-height: 0; margin: 14px; overflow: auto; border: 1px solid #273037; border-radius: 11px; background: rgba(18,24,28,.62); padding: 10px 16px; }
+  p { margin: 0; line-height: 26px; color: #b8bdc0; }
+  mark { color: #5ed257; background: none; }
+</style>
+</head>
+<body>
+<header class="pywebview-drag-region">
+  <span class="mark">☢</span>
+  <strong>STALZONE</strong>
+  <em>Лог</em>
+  <span class="state"><i class="dot"></i> <span id="state">Онлайн</span></span>
+  <button id="close" type="button" aria-label="Закрыть">×</button>
+</header>
+<main id="lines"></main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&','<':'<','>':'>','"':'"'}[c]));
+async function paint() {
+  const data = await pywebview.api.poll();
+  document.getElementById("state").textContent = data.busy ? "В работе" : "Онлайн";
+  const lines = data.logs || [];
+  const box = document.getElementById("lines");
+  const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = lines.map(line => `<p>${esc(line).replace(/OK/g, "<mark>OK</mark>")}</p>`).join("") || "<p><mark>Ожидание следующего прогона...</mark></p>";
+  if (nearEnd) box.scrollTop = box.scrollHeight;
+}
+window.addEventListener("pywebviewready", () => {
+  document.getElementById("close").onclick = () => pywebview.api.close_log();
+  paint();
+  setInterval(paint, 400);
+});
+</script>
+</body>
+</html>
+"""
+
 PAGE = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -876,375 +966,254 @@ PAGE = r"""<!DOCTYPE html>
 <style>
   :root {
     --bg: #080d11;
-    --bg-soft: #0b1115;
     --side: #0b1115;
     --card: #151b1f;
     --card-2: #192126;
-    --line: #263039;
-    --line-soft: #20282d;
+    --line: #273037;
     --green: #55cf4d;
-    --green-dim: rgba(28,76,38,.32);
-    --green-bright: #5ed457;
+    --green-dim: rgba(28, 76, 38, .32);
     --orange: #f4c51d;
-    --ink: #d6d8da;
-    --ink-strong: #ebebec;
+    --ink: #ebebec;
     --dim: #8c9297;
-    --buy: #55cf4d;
+    --buy: #8dcdf2;
     --sell: #65d66a;
     --hold: #f4c51d;
-    --skip: #8c9297;
+    --skip: #767d82;
     --gold: #55cf4d;
-    --price: #8dcdf2;
   }
   * { box-sizing: border-box; }
-  html, body {
-    margin: 0; height: 100%;
-    background:
-      radial-gradient(circle at 82% 0%, rgba(43,74,54,.08), transparent 28%),
-      linear-gradient(135deg, #0b1115, #080d11);
-    color: var(--ink);
-    font: 14px/1.4 "Segoe UI", Arial, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: #d6d8da; font: 14px/1.4 "Segoe UI", Arial, sans-serif; }
   button, select, input { font: inherit; color: inherit; }
-  button {
-    cursor: pointer;
-    border: 1px solid #313b42;
-    border-radius: 8px;
-    padding: 8px 12px;
-    background: #10161a;
-    color: #e9eaeb;
-    transition: background .15s ease, border-color .15s ease, filter .15s ease;
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.gold { background: linear-gradient(#349a3f, #267d32); color: #e9eaeb; font-weight: 600; border: 1px solid #42a442; border-radius: 8px; }
+  button.stop { background: #3a2222; color: #f0c2b8; border: 0; border-radius: 8px; padding: 8px 12px; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  header.compact-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; flex-shrink: 0; border-bottom: 1px solid #263039; background: #0c1216; }
+  header.compact-head h1 { margin: 0; font-size: 15px; letter-spacing: 0.08em; color: var(--green); }
+  header.compact-head button { padding: 5px 9px; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; }
+  #compact-status { margin-left: auto; color: var(--dim); font-size: 12px; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #full { display: grid; flex: 1; min-height: 0; height: 100%; }
+  #compact { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0 12px 10px; gap: 8px; }
+  #compact .sheet { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  #compact th, #compact td { padding: 8px; font-size: 12px; }
+  #compact td:first-child { white-space: normal; }
+  #compact td:nth-child(3), #compact td:nth-child(4) { color: var(--green); font-weight: 700; }
+  .compact-actions { display: flex; gap: 6px; }
+  .compact-brand { display: flex; align-items: center; gap: 8px; }
+  .logo { width: 28px; height: 28px; display: grid; place-items: center; background: linear-gradient(135deg, #66db58, #38aa35); color: #09100b; font-weight: 800; }
+  #hudhint { font-size: 11px; color: var(--dim); flex-shrink: 0; padding: 6px 12px; border-top: 1px solid #20282d; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .app-shell {
+    min-height: 0; height: 100%; flex: 1;
+    display: grid; grid-template: 74px 1fr / 0 1fr;
+    transition: grid-template-columns .32s cubic-bezier(.22,.8,.3,1);
+    background: radial-gradient(circle at 82% 0%, rgba(43, 74, 54, .08), transparent 28%), linear-gradient(135deg, #0b1115, #080d11);
   }
-  button:hover { background: #172126; }
-  button:disabled { opacity: .45; cursor: default; }
-  button.gold {
-    border: 1px solid #42a442;
-    background: linear-gradient(#349a3f, #267d32);
-    color: #e9eaeb;
-    font-weight: 600;
-    box-shadow: inset 0 1px #75cc7470;
-  }
-  button.gold:hover { filter: brightness(1.08); background: linear-gradient(#349a3f, #267d32); }
-  button.stop {
-    border: 1px solid #a7292d;
-    background: linear-gradient(#c52a31, #a91f25);
-    color: #f3f3f3;
-  }
-  button.stop:hover { filter: brightness(1.06); }
-  body { display: flex; flex-direction: column; }
-  header {
-    display: flex; gap: 10px; align-items: center;
-    padding: 8px 14px; flex-shrink: 0;
-    border-bottom: 1px solid var(--line);
-    background: rgba(12,18,22,.95);
-    box-shadow: 0 2px 14px #0008;
-  }
-  header h1, .brand b {
-    margin: 0; font-size: 16px; letter-spacing: .04em; color: var(--green);
-  }
-  header button { padding: 6px 10px; height: 36px; }
-  #status {
-    margin-left: auto; color: var(--dim); font-size: 12px;
-    max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  #full { display: flex; flex: 1; min-height: 0; }
-  .header-brand { display: flex; align-items: center; gap: 9px; }
-  .logo {
-    width: 32px; height: 32px; border-radius: 0;
-    display: grid; place-items: center;
-    background: linear-gradient(135deg, #66db58, #38aa35);
-    color: #09100b; font-weight: 800; font-size: 15px;
-    box-shadow: 0 0 12px rgba(85,207,77,.2);
-  }
-  #hudhint {
-    font-size: 11px; color: var(--dim); flex-shrink: 0;
-    padding: 6px 14px; border-top: 1px solid var(--line-soft);
-  }
-  button:focus-visible, input:focus-visible, select:focus-visible {
-    outline: 2px solid var(--green); outline-offset: 1px;
-  }
-
-  .sidenav {
-    width: 220px; flex-shrink: 0;
-    border-right: 1px solid #242d32;
-    background: var(--side);
-    display: flex; flex-direction: column;
-    padding: 12px 10px 16px; gap: 8px;
-  }
-  .brand {
-    display: flex; align-items: center; gap: 10px;
-    padding: 4px 6px 12px; border-bottom: 1px solid #252d32;
-  }
-  .brand small { display: block; color: #b4b7ba; font-size: 12px; margin-top: 2px; }
-  .workspace {
-    flex: 1; min-width: 0; min-height: 0;
-    display: flex; flex-direction: column;
-    background: transparent;
-  }
-  .bar {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-    padding: 12px 18px; border-bottom: 1px solid var(--line);
-    background: rgba(12,18,22,.75);
-    box-shadow: 0 2px 10px #0005;
-  }
-  .bar span { color: var(--dim); font-size: 13px; }
-  #q, #mins, #budget, #mapq, input, select {
-    background: #10161a; border: 1px solid #313b42; border-radius: 8px;
-    padding: 7px 10px; color: var(--ink-strong);
-  }
-  #mins { width: 52px; text-align: center; }
-  #budget { width: 90px; }
-  .tabs { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
-  .tabs button {
-    width: 100%; text-align: left; border: 1px solid transparent;
-    border-radius: 8px; background: transparent; color: #b9bdc1;
-    padding: 10px 12px; height: auto;
-  }
+  .app-shell.menu-open { grid-template-columns: 220px 1fr; }
+  .topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; border-bottom: 1px solid #263039; background: rgba(12, 18, 22, .95); box-shadow: 0 2px 14px #0008; }
+  .brand { height: 100%; width: 220px; flex: 0 0 220px; display: flex; align-items: center; gap: 9px; padding: 0 14px; border-right: 1px solid #252d32; white-space: nowrap; }
+  .brand-mark { width: 37px; height: 37px; flex: 0 0 37px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; color: #09100b; background: linear-gradient(135deg, #66db58, #38aa35); }
+  .brand-mark span { font-size: 26px; line-height: 1; }
+  .brand strong { color: var(--green); font-size: 19px; }
+  .brand em { color: #b4b7ba; font-style: normal; font-size: 16px; }
+  .top-actions { display: flex; gap: 10px; flex: 0 0 auto; }
+  .topbar button.primary-btn, .topbar button.outline-btn, .topbar button.stop-btn { display: flex; align-items: center; justify-content: center; gap: 6px; height: 40px; border-radius: 8px; font-size: 14px; color: #e9eaeb; white-space: nowrap; }
+  .primary-btn { padding: 0 12px; border: 1px solid #42a442; background: linear-gradient(#349a3f, #267d32); box-shadow: inset 0 1px #75cc7470; }
+  .outline-btn { padding: 0 10px; border: 1px solid #313b42; background: #10161a; }
+  .outline-btn.active, .outline-btn.on { border-color: #4ebf48; color: #61d55a; }
+  .stop-btn { padding: 0 12px; border: 1px solid #a7292d; background: linear-gradient(#c52a31, #a91f25); }
+  .stop-btn b { width: 15px; height: 15px; background: #f3f3f3; border-radius: 1px; }
+  .settings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 42px; flex: 1; min-width: 0; }
+  .setting { min-width: 0; padding: 0 10px; overflow: hidden; border-left: 1px solid #20282d; display: flex; flex-direction: column; justify-content: center; gap: 2px; white-space: nowrap; }
+  .setting small { color: #8c9297; font-size: 12px; }
+  .setting span, .setting .mode-btn { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; font-size: 14px; color: #e1e2e3; }
+  .mode-btn { border: 0; background: transparent; padding: 0; color: #e1e2e3; }
+  .settings input { width: 64px; padding: 0; border: 0; background: transparent; color: #e1e2e3; text-align: left; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px #4fc64a44; }
+  .hud-actions { display: flex; gap: 6px; flex: 0 0 auto; padding-right: 12px; }
+  .hud-actions button { width: 36px; height: 36px; padding: 0; border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; font-size: 22px; line-height: 1; }
+  .sidebar { width: 220px; border-right: 1px solid #242d32; padding: 12px 10px 18px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; opacity: 0; transform: translateX(-100%); visibility: hidden; transition: transform .32s cubic-bezier(.22,.8,.3,1), opacity .22s ease, visibility 0s linear .32s; }
+  .menu-open .sidebar { opacity: 1; transform: none; visibility: visible; transition-delay: 0s; }
+  .tabs { display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+  .tabs button { width: 100%; height: 44px; display: flex; align-items: center; gap: 15px; padding: 0 13px; border: 1px solid transparent; border-radius: 8px; color: #b9bdc1; background: transparent; font-size: 16px; text-align: left; }
+  .tabs button svg { flex: 0 0 auto; }
   .tabs button:hover { background: #111a1c; color: #e8e9e9; }
-  .tabs button.on {
-    border-color: #225e31; color: var(--green-bright);
-    background: linear-gradient(90deg, rgba(28,76,38,.32), rgba(24,63,35,.12));
-  }
-  #stats {
-    display: none;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px; padding: 14px 18px 4px;
-  }
+  .tabs button.on { border-color: #225e31; color: #5ed457; background: linear-gradient(90deg, rgba(28, 76, 38, .32), rgba(24, 63, 35, .12)); }
+  .subscription-card { position: relative; margin-top: auto; display: flex; align-items: center; gap: 12px; padding: 14px; overflow: hidden; border: 1px solid #285e34; border-radius: 9px; background: linear-gradient(135deg, rgba(35, 82, 45, .38), rgba(15, 27, 21, .72)); }
+  .subscription-icon { flex: 0 0 38px; width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid #34763f; border-radius: 8px; color: var(--green); background: rgba(42, 103, 52, .24); }
+  .subscription-card small { display: block; color: #7e8982; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .subscription-card strong { color: #d7ddd8; font-size: 14px; font-weight: 500; }
+  .stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 15px 23px 16px 21px; }
+  #screen-title { margin: 0; font-size: 36px; line-height: 1.2; font-weight: 600; color: #ebebec; letter-spacing: -.7px; }
+  .rule { height: 2px; margin: 7px 0 13px; background: #20282d; flex: 0 0 2px; }
+  #stats { display: none; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 0; }
   body[data-screen="buys"] #stats { display: grid; }
-  .stat {
-    height: 88px;
-    border: 1px solid #293238; border-radius: 11px;
-    background: linear-gradient(145deg, #192126, #151b1f);
-    display: flex; flex-direction: column; justify-content: center; gap: 4px;
-    padding: 14px 16px;
-    box-shadow: inset 0 1px rgba(255,255,255,.025), 0 3px 9px #0003;
-  }
-  .stat span { color: #a9adb1; font-size: 13px; }
-  .stat b { font-size: 28px; font-weight: 500; color: var(--green); line-height: 1.15; }
-  .stat b.green { color: var(--green-bright); }
-
-  .bookstats {
-    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px; margin-bottom: 12px;
-  }
-  #bookbox input.sell, #bookbox input.qty, #bookbox input.buy, #bookbox input.name {
-    background: #10161a; border: 1px solid #313b42; border-radius: 6px; padding: 6px 8px;
-  }
+  .stat { height: 92px; border: 1px solid #293238; border-radius: 11px; background: linear-gradient(145deg, #192126, #151b1f); display: flex; align-items: center; gap: 12px; padding: 14px; color: var(--green); box-shadow: inset 0 1px rgba(255,255,255,.025), 0 3px 9px #0003; }
+  .stat svg { flex: 0 0 auto; }
+  .stat div { display: flex; flex-direction: column; min-width: 0; }
+  .stat span { color: #a9adb1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stat b { font-weight: 500; font-size: 28px; line-height: 1.15; color: inherit; }
+  .stat.yellow { color: #f4c51d; }
+  #main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .view { display: none; min-height: 0; }
+  .view.on { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .page { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 10px; }
+  .page-head h2 { display: none; }
+  .page-head p, .found { margin: 4px 0 0; color: var(--dim); }
+  .sheet { flex: 1; min-height: 0; overflow: auto; background: rgba(18, 24, 28, .62); border: 1px solid #273037; border-radius: 11px; }
+  .lots.panel { border: 0; background: transparent; box-shadow: none; }
+  .lots { min-height: 0; flex: 1; display: flex; flex-direction: column; border: 1px solid #273037; border-radius: 11px; overflow: hidden; background: rgba(18, 24, 28, .62); }
+  .table-head { height: 40px; flex: 0 0 40px; display: grid; grid-template-columns: 21% 23% 22% 22% 12%; align-items: center; padding: 0 23px; border-bottom: 1px solid #263037; color: #afb3b6; font-size: 12px; letter-spacing: .6px; }
+  .table-head span:last-child { text-align: right; }
+  .lots-list { min-height: 0; overflow: auto; flex: 1; }
+  .lot-row { min-height: 62px; display: grid; grid-template-columns: 21% 23% 22% 22% 12%; align-items: center; padding: 0 23px; border-bottom: 1px solid #242e33; background: linear-gradient(90deg, rgba(25, 35, 31, .38), rgba(14, 20, 24, .18)); cursor: pointer; }
+  .lot-row:hover { background: linear-gradient(90deg, rgba(47, 84, 51, .3), rgba(20, 29, 33, .5)); }
+  .lot-row.purchased { opacity: .52; }
+  .lot-row.purchased .lot-name strong { text-decoration: line-through; }
+  .buy-check input { position: absolute; opacity: 0; pointer-events: none; }
+  .buy-check > i { width: 21px; height: 21px; display: grid; place-items: center; border: 1px solid #465259; border-radius: 5px; color: transparent; background: #11181c; }
+  .buy-check > i span { font-size: 14px; font-style: normal; font-weight: 700; }
+  .buy-check input:checked + i { color: #071009; border-color: var(--green); background: var(--green); }
+  .lot-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .lot-name > span { display: flex; flex-direction: column; min-width: 0; }
+  .lot-name strong { overflow: hidden; color: #d8dddf; font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+  .lot-name small { margin-top: 3px; color: #707b80; font-size: 10px; letter-spacing: .4px; }
+  .item-gem { width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid currentColor; border-radius: 9px 4px; }
+  .item-gem.red { color: #e05a54; background: rgba(224, 90, 84, .18); }
+  .item-gem.blue { color: #45a9e9; background: rgba(69, 169, 233, .18); }
+  .item-gem.orange { color: #df9a45; background: rgba(223, 154, 69, .18); }
+  .item-gem.violet { color: #a879e2; background: rgba(168, 121, 226, .18); }
+  .price { color: #8dcdf2; font-size: 14px; }
+  .profit { display: flex; flex-direction: column; width: fit-content; color: #65d66a; font-size: 14px; }
+  .profit > i { width: 65px; height: 3px; margin-top: 5px; overflow: hidden; border-radius: 3px; background: #263138; }
+  .profit > i b { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #329c3c, #6add60); }
+  .hourly { justify-self: end; padding: 5px 9px; border: 1px solid #2b4935; border-radius: 12px; color: #73d978; background: rgba(48, 101, 55, .18); font-size: 12px; }
+  .lot-more { padding: 8px 23px 12px; color: var(--dim); border-bottom: 1px solid #242e33; display: flex; flex-wrap: wrap; gap: 8px 16px; }
+  .empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #767d82; min-height: 220px; }
+  .empty h2 { margin: 8px 0 0; color: #bfc2c4; font-size: 22px; font-weight: 400; }
+  .empty p { margin-top: 9px; color: #9a9fa3; font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid #242e33; }
+  th { position: sticky; top: 0; background: #1a2226; color: #afb3b6; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
+  tr:hover td { background: #172024; }
+  .buy { color: var(--green); } .sell { color: var(--sell); } .hold { color: var(--orange); } .skip { color: var(--skip); }
+  .q0 { color: #c8c2b8; } .q1 { color: #7dcea0; } .q2 { color: #5dade2; }
+  .q3 { color: #c39bd3; } .q4 { color: #e07a7a; } .q5 { color: #f0d78c; }
+  .RANK_LEGEND { color: #e0b15a; } .RANK_MASTER { color: #e07a7a; } .RANK_VETERAN { color: #c4a3ff; }
+  .RANK_STALKER { color: #8ebfff; } .RANK_NEWBIE { color: #9ddeaf; } .DEFAULT { color: var(--ink); }
+  .log { flex: 0 0 189px; margin-top: 13px; border: 1px solid #273037; border-radius: 11px; overflow: hidden; background: rgba(18, 24, 28, .62); display: flex; flex-direction: column; }
+  body:not([data-screen="buys"]) .log { display: none; }
+  .log-title { height: 37px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid #253037; }
+  .log-title b { font-size: 16px; font-weight: 500; color: #e2e3e4; }
+  .log-title span { color: #aeb2b5; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+  .log-lines { padding: 7px 17px; color: #b8bdc0; font-size: 14px; line-height: 26px; overflow: auto; }
+  .log-lines mark { color: #5ed257; background: none; }
+  .bookstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
   #bookbox input.sell { width: 120px; text-align: right; }
   #bookbox input.qty, #bookbox input.buy { width: 110px; text-align: right; }
-  #bookbox input.name { width: 100%; }
+  #bookbox input.name { width: 220px; text-align: left; }
+  .own { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .own input { width: 140px; text-align: left; }
+  .namebox { position: relative; flex: 1 1 260px; min-width: 220px; }
+  .namebox input { width: 100%; text-align: left; }
+  .namelist { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; width: min(420px, 70vw); max-height: 240px; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .namelist button { display: block; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 0; padding: 8px 12px; color: var(--ink); }
+  .namelist button.on, .namelist button:hover { background: var(--green-dim); color: var(--green); }
+  .own .cut { color: var(--dim); font-size: 13px; }
+  .own .cut b { color: var(--ink); }
+  input, select { background: #0e1211; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  #q { width: 100%; text-align: left; }
+  #ask { display: none; position: fixed; inset: 0; z-index: 5000; background: rgba(6, 8, 7, .72); align-items: center; justify-content: center; }
+  #ask.on { display: flex; }
+  .ask-card { width: min(420px, calc(100% - 32px)); background: #151b1f; border: 1px solid #273037; border-radius: 16px; padding: 18px 18px 14px; }
+  .ask-card p { margin: 0 0 16px; }
+  .ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
   #bookbox td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  #bookbox .plus { color: var(--green-bright); }
-  #bookbox .minus { color: #e05a54; }
-
-  .own { display: flex; flex-direction: column; gap: 8px; }
-  .own input {
-    background: #10161a; border: 1px solid #313b42; border-radius: 8px; padding: 8px 10px;
-  }
-  .namebox { position: relative; }
-  .namelist {
-    position: absolute; z-index: 5; left: 0; right: 0; top: 100%;
-    background: #0f1518; border: 1px solid var(--line); border-radius: 8px;
-    max-height: 220px; overflow: auto;
-  }
-  .namelist button {
-    width: 100%; text-align: left; border: 0; border-radius: 0;
-    background: transparent; padding: 8px 12px;
-  }
-  .namelist button.on, .namelist button:hover { background: #172126; }
-  .own .cut b { color: var(--green); }
-
-  #ask {
-    display: none; position: fixed; inset: 0; z-index: 40;
-    background: rgba(0,0,0,.55); place-items: center;
-  }
-  #ask.on { display: grid; }
-  .ask-card {
-    background: #12181c; border: 1px solid var(--line); border-radius: 12px;
-    padding: 18px 20px; max-width: 360px; box-shadow: 0 12px 40px #000a;
-  }
-  .ask-card p { margin: 0 0 14px; color: var(--ink-strong); }
-  .ask-actions { display: flex; gap: 8px; justify-content: flex-end; }
-
-  main {
-    flex: 1; min-height: 0; overflow: auto;
-    padding: 12px 18px 16px;
-  }
-  .view { display: none; }
-  .view.on { display: block; }
-  .page-head h2 {
-    margin: 0 0 4px; font-size: 28px; font-weight: 600;
-    color: var(--ink-strong); letter-spacing: -.5px;
-  }
-  .page-head p, .found { color: var(--dim); font-size: 13px; margin: 0 0 12px; }
-  .sheet {
-    border: 1px solid #273037; border-radius: 11px; overflow: hidden;
-    background: rgba(18,24,28,.62); box-shadow: 0 3px 10px #0003;
-  }
-  table { width: 100%; border-collapse: collapse; }
-  th, td {
-    padding: 10px 14px; text-align: left;
-    border-bottom: 1px solid #242e33;
-  }
-  th {
-    color: #afb3b6; font-size: 11px; letter-spacing: .6px;
-    font-weight: 500; background: rgba(12,18,22,.5);
-  }
-  tr:hover td {
-    background: linear-gradient(90deg, rgba(47,84,51,.22), rgba(20,29,33,.35));
-  }
-  td { color: #d8dddf; font-size: 13px; }
-  tr.buy td:first-child, .buy { color: var(--green-bright); }
-  tr.q0 td:first-child { color: #e05a54; }
-  tr.q3 td:first-child { color: #a879e2; }
-
-  #log {
-    flex: 0 0 160px; overflow: auto;
-    margin: 0 18px 14px;
-    border: 1px solid #273037; border-radius: 11px;
-    background: rgba(18,24,28,.62);
-    padding: 8px 14px; color: #b8bdc0; font-size: 13px; line-height: 1.7;
-  }
-  #log mark { color: var(--green-bright); background: none; }
-
-  .balance {
-    margin-top: auto;
-    border: 1px solid #285e34; border-radius: 9px;
-    background: linear-gradient(135deg, rgba(35,82,45,.38), rgba(15,27,21,.72));
-    padding: 12px 14px;
-    box-shadow: inset 0 1px rgba(111,220,104,.08), 0 8px 24px #0004;
-  }
-  .balance span, .balance small {
-    display: block; color: #7e8982; font-size: 11px;
-    text-transform: uppercase; letter-spacing: .6px;
-  }
-  .balance b {
-    display: block; margin: 4px 0; color: #d7ddd8;
-    font-size: 16px; font-weight: 500;
-  }
-  .balance small {
-    text-transform: none; letter-spacing: 0; color: #aeb2b5;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-
-  .auc {
-    flex: 1; min-height: 0;
-    display: grid;
-    grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px);
-  }
-  .filters, .detail {
-    min-height: 0; overflow: auto; padding: 14px;
-    background: var(--side);
-  }
+  #bookbox .plus { color: var(--green); }
+  #bookbox .minus { color: #e07a7a; }
+  .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
+  .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
   .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-  .detail { border-left: 1px solid var(--line); }
-  .filters h3, .detail h2 {
-    margin: 0 0 8px; font-size: 14px; color: var(--ink-strong); font-weight: 600;
-  }
-  .filters label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 12px; }
-  .range { display: flex; gap: 6px; }
-  .range input {
-    flex: 1; background: #10161a; border: 1px solid #313b42;
-    border-radius: 6px; padding: 6px 8px;
-  }
-  .results { flex: 1; min-height: 0; overflow: auto; }
-  .result-list { display: flex; flex-direction: column; gap: 4px; }
-  .pick {
-    display: flex; gap: 10px; align-items: center;
-    padding: 8px 10px; border-radius: 8px; border: 1px solid transparent;
-    cursor: pointer;
-  }
-  .pick:hover { background: #111a1c; }
-  .pick.on {
-    border-color: #225e31;
-    background: linear-gradient(90deg, rgba(28,76,38,.28), rgba(24,63,35,.1));
-  }
-  .pick .avatar {
-    width: 36px; height: 36px; border-radius: 8px;
-    background: #1a2226; border: 1px solid var(--line);
-  }
-  .pick .who { flex: 1; min-width: 0; }
-  .pick .who b { display: block; color: var(--ink-strong); font-size: 13px; }
-  .pick .who small, .found { color: var(--dim); font-size: 11px; }
-  .pick .watch {
-    border: 1px solid #313b42; background: #10161a;
-    width: 32px; height: 32px; padding: 0; border-radius: 6px;
-  }
-  .pick .watch.on { border-color: var(--green); color: var(--green); }
-
-  tr.more td {
-    background: #0f1518; color: var(--dim); font-size: 12px;
-    border-bottom: 1px solid #242e33;
-  }
+  .detail { border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
+  .filters h3, .detail h2 { margin: 4px 0; }
+  .filters label { color: var(--dim); font-size: 12px; }
+  .range { display: flex; gap: 8px; }
+  .range input { width: 100%; }
+  .results { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; gap: 8px; }
+  .result-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+  .pick { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; cursor: pointer; color: inherit; }
+  .pick.on { border-color: var(--green); background: #14211b; }
+  .pick .avatar { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #101614; color: var(--green); font-weight: 700; flex-shrink: 0; }
+  .pick .who { display: flex; flex-direction: column; min-width: 0; }
+  .pick .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pick .who small, .found { color: var(--dim); }
+  .pick .watch { margin-left: auto; color: var(--dim); background: transparent; border: 0; font-size: 18px; }
+  .pick .watch.on { color: var(--orange); }
+  tr.more td { white-space: normal; color: var(--dim); }
   tr.face { cursor: pointer; }
-  #lotinfo { color: var(--dim); font-size: 13px; margin-bottom: 8px; }
-  #lotstats {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 8px; margin-bottom: 12px;
-  }
-  .sub { display: flex; gap: 6px; margin-bottom: 10px; }
-  .sub button.on { border-color: #4ebf48; color: #61d55a; }
-  .detail .sheet { margin-top: 8px; }
-  .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-
-  .mapwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
-  #mapbar button.on, #maplayers button.on { border-color: #4ebf48; color: #61d55a; }
+  #lotinfo { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  #lotstats { color: var(--dim); font-size: 13px; padding: 4px 2px 8px; }
+  .sub { display: flex; gap: 6px; }
+  .sub button { border: 1px solid #313b42; border-radius: 8px; background: #10161a; padding: 8px 12px; }
+  .sub button.on { color: #071009; background: var(--green); border-color: var(--green); }
+  .tools { display: flex; gap: 8px; align-items: center; padding: 8px; flex-wrap: wrap; }
+  .tools button, .bar button { border: 1px solid #313b42; border-radius: 8px; background: #10161a; padding: 8px 12px; color: #e9eaeb; }
+  .mapwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  #mapbar button.on, #maplayers button.on { background: var(--green); color: #071009; }
   #mapq { width: 180px; text-align: left; }
-  #wikimap {
-    flex: 1; min-height: 0; background: #0e0c0a;
-    border: 1px solid #273037; border-radius: 11px;
+  #wikimap { flex: 1; min-height: 0; background: #0e0c0a; }
+  @media (max-width: 1100px) {
+    .brand em, .topbar svg { display: none; }
+    .stat b { font-size: 22px; }
+    #screen-title { font-size: 28px; }
+    .table-head, .lot-row { padding: 0 10px; }
   }
-
-  input[type="checkbox"] { accent-color: var(--green); }
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-thumb { background: #3e4b4f; border-radius: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-
-  /* Figma top-bar action group look inside .bar */
-  .bar #run { min-width: 110px; }
-  .bar #stop { min-width: 90px; }
-
 </style>
 </head>
-<body class="full" data-screen="buys">
+<body data-screen="buys" class="full">
 <div id="ask"><div class="ask-card"><p id="ask-text"></p><div class="ask-actions"><button type="button" id="ask-no">Оставить</button><button type="button" id="ask-yes" class="stop">Убрать</button></div></div></div>
-<header class="pywebview-drag-region">
-  <div class="header-brand"><span class="logo">S</span><h1>STALZONE</h1></div>
-  <div id="status" role="status">ожидание</div>
-  <button id="backgame" title="Вернуть управление игре (Esc)">В игру</button>
-  <button id="closehud" aria-label="Закрыть оверлей">×</button>
-</header>
-<div id="full">
-  <aside class="sidenav">
-    <div class="brand"><span class="logo">S</span><div><b>STALZONE</b><small>Аукцион</small></div></div>
-    <div class="tabs" id="tabs"></div>
-    <div class="balance"><span>Бюджет на выкуп</span><b id="side-budget">5 000 000</b><small id="side-status">ожидание</small></div>
+<div id="full" class="app-shell menu-open">
+  <header class="topbar pywebview-drag-region">
+    <div class="brand">
+      <button type="button" class="brand-mark" id="menu-toggle" aria-label="Открыть меню"><span>☢</span></button>
+      <strong>STALZONE</strong><em>Аукцион</em>
+    </div>
+    <div class="top-actions">
+      <button class="primary-btn" id="run"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg> Прогон</button>
+      <button class="outline-btn" id="auto"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="5" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="18" r="3"/><path d="m10 7-3 8m7-8 3 8M9 18h6"/></svg> Автопрогон</button>
+      <button class="outline-btn" id="live">Онлайн</button>
+      <button class="stop-btn" id="stop" disabled><b></b> Стоп</button>
+    </div>
+    <div class="settings">
+      <div class="setting"><small>Статус</small><span><i class="dot"></i> <em id="status">Онлайн</em></span></div>
+      <div class="setting"><small>Интервал</small><span>каждые <input id="mins" value="30" inputmode="numeric"/> мин</span></div>
+      <div class="setting budget-setting"><small>Бюджет</small><span><input id="budget" value="5кк" placeholder="5кк" title="Можно писать 5кк, 500к или 5000000"/></span></div>
+      <div class="setting"><small>Режим</small><button class="mode-btn" id="orderswitch2" data-order type="button">По часу</button></div>
+    </div>
+    <div class="hud-actions">
+      <button class="act-close" id="closehud" type="button" aria-label="Закрыть">×</button>
+    </div>
+  </header>
+  <aside class="sidebar">
+    <nav class="tabs" id="tabs"></nav>
+    <div class="subscription-card">
+      <div class="subscription-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></div>
+      <div><small>Подписка</small><strong id="side-status">истекает через:</strong></div>
+    </div>
   </aside>
-  <div class="workspace">
-    <div class="bar">
-      <button class="gold" id="run">Прогон</button>
-      <button id="auto">Автопрогон</button>
-      <button id="live">Онлайн</button>
-      <span>каждые</span>
-      <input id="mins" value="30"/>
-      <span>мин</span>
-      <span>бюджет</span>
-      <input id="budget" value="5кк" placeholder="5кк" title="Можно писать 5кк, 500к или 5000000"/>
-      <button id="orderswitch2" data-order type="button">По часу</button>
-      <button class="stop" id="stop" disabled>Стоп</button>
-    </div>
-    <div id="stats">
-      <div class="stat"><span>Лотов в бюджете</span><b id="stat-count">0</b></div>
-      <div class="stat"><span>Плюс</span><b id="stat-gain" class="green">0</b></div>
-      <div class="stat"><span>Бюджет</span><b id="stat-budget">5000000</b></div>
-      <div class="stat"><span>Рынок</span><b id="stat-live">ждёт</b></div>
-    </div>
-    <main id="main"></main>
-    <div id="log"></div>
+  <div class="stage">
+    <h1 id="screen-title">Выкуп</h1>
+    <div class="rule"></div>
+    <section id="stats">
+      <article class="stat"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg><div><span>Лотов в бюджете</span><b id="stat-count">0</b></div></article>
+      <article class="stat"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 17 6-6 4 4 8-9M15 6h6v6"/></svg><div><span>Плюс</span><b id="stat-gain">0</b></div></article>
+      <article class="stat"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h14a2 2 0 0 1 2 2v10H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h11"/><path d="M15 11h7v5h-7a2.5 2.5 0 0 1 0-5Z"/></svg><div><span>Бюджет</span><b id="stat-budget">5000000</b></div></article>
+      <article class="stat yellow"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><div><span>Рынок ждёт</span><b id="stat-live">ждёт</b></div></article>
+    </section>
+    <div id="main"></div>
   </div>
 </div>
-<div id="hudhint">F10 — управление оверлеем</div>
 <script>
 const TAB_ORDER = ["buys","farm","arsenal","shelter_buy","shelter_sell","consumables","arts","protos"];
 const TAB_BLURB = {
@@ -1259,7 +1228,33 @@ const TAB_BLURB = {
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
 const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}};
+const TAB_ICON = {buys:"cart", book:"clipboard", farm:"sprout", arsenal:"shield", shelter_buy:"home", shelter_sell:"home", consumables:"capsule", arts:"diamond", protos:"flask", auc:"gavel", map:"pin", log:"log"};
 const $ = (id) => document.getElementById(id);
+const ICONS = {
+  cart: '<circle cx="9" cy="20" r="1"/><circle cx="19" cy="20" r="1"/><path d="M3 4h3l2.4 11.5a2 2 0 0 0 2 1.5h7.7a2 2 0 0 0 2-1.6L22 8H7"/>',
+  clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M9 9h6M9 13h6M9 17h4"/>',
+  sprout: '<path d="M12 21V10M12 13C7 13 4 10 4 5c5 0 8 3 8 8ZM12 10c0-4 3-7 8-7 0 5-3 7-8 7Z"/>',
+  shield: '<path d="M12 22s8-3 8-10V5l-8-3-8 3v7c0 7 8 10 8 10Z"/>',
+  home: '<path d="m3 11 9-8 9 8"/><path d="M5 10v11h14V10M9 21v-7h6v7"/>',
+  capsule: '<path d="m8.5 19.5-4-4a4.2 4.2 0 0 1 0-6l5-5a4.2 4.2 0 0 1 6 0l4 4a4.2 4.2 0 0 1 0 6l-5 5a4.2 4.2 0 0 1-6 0Z"/><path d="m7 17 10-10"/>',
+  diamond: '<path d="M3 9h18l-9 12L3 9Z"/><path d="m3 9 4-5h10l4 5M8 9l4 12 4-12"/>',
+  flask: '<path d="M9 3h6M10 3v6l-5 10a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3L14 9V3"/>',
+  gavel: '<path d="m14 5 5 5M12 7l5 5M5 20l7-7M3 21h10"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+  log: '<path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
+  target: '<circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="9"/><path d="M12 3v4m0 10v4M3 12h4m10 0h4"/>'
+};
+function icon(name) {
+  return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+}
+function tabButton(key, label, on) {
+  const b = document.createElement("button");
+  b.dataset.key = key;
+  b.className = on ? "on" : "";
+  b.innerHTML = icon(TAB_ICON[key] || "layers") + `<span>${label}</span>`;
+  b.onclick = () => show(key);
+  return b;
+}
 
 function prettyMoney(raw) {
   const text = String(raw ?? "").trim().toLowerCase().replace(/\s/g, "").replace(",", ".");
@@ -1344,31 +1339,33 @@ function paint(key) {
 }
 
 function paintBuys(box, rows, rule) {
-  const face = [[0, "Предмет"], [4, "Купить"], [7, "Плюс"], [10, "В час"]];
-  const head = `<th>Купил</th>` + face.map(([i, name]) => `<th data-i="${i}">${name}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
   state.buyDeals = {};
-  const body = rows.map(r => {
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty"><div class="target">${icon("target")}</div><h2>Прогон найдёт подходящие лоты</h2><p>Запустите прогон для поиска лотов в бюджете.</p></div>`;
+    return;
+  }
+  const tones = ["red", "blue", "orange", "violet"];
+  box.innerHTML = rows.map(r => {
     const id = `${r.cells[0]}|${r.cells[4]}`;
     const open = state.openBuy === id;
     if (r.deal) state.buyDeals[id] = r.deal;
     const bought = r.deal && (state.book || []).some(row => row.today && row.name === r.deal.name && Number(row.buy) === Number(r.deal.buy));
-    const cells = face.map(([i]) => `<td>${esc(r.cells[i])}</td>`).join("");
-    const boxCell = r.deal ? `<td><input type="checkbox" class="got" data-key="${esc(id)}"${bought ? " checked" : ""}></td>` : "<td></td>";
+    const roiText = String(r.cells[8] || "");
+    const roiNum = Number((roiText.match(/(\d+(?:[.,]\d+)?)/) || [])[1]?.replace(",", ".")) || 0;
+    const roi = Math.max(0, Math.min(100, roiNum));
+    const tone = tones[(r.cells[0] || "").length % tones.length];
     const bits = [[1, "Редкость"], [2, "Точка"], [3, "Лоты"], [5, "Пачка"], [6, "После 5%"], [8, "Рентабельность"], [9, "Продаж в час"], [11, "План"]]
       .filter(([i]) => r.cells[i] && r.cells[i] !== "—")
       .map(([i, name]) => `<div><b>${name}.</b> ${esc(r.cells[i])}</div>`).join("");
-    const more = open ? `<tr class="more"><td colspan="5">${bits}<button type="button" class="ingame">Найти в аукционе</button></td></tr>` : "";
-    return `<tr class="face ${r.tag || ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${boxCell}${cells}</tr>${more}`;
+    const check = r.deal
+      ? `<span class="buy-check"><input type="checkbox" class="got" data-key="${esc(id)}"${bought ? " checked" : ""}><i><span>✓</span></i></span>`
+      : "<span></span>";
+    const more = open ? `<div class="lot-more">${bits}<button type="button" class="ingame">Найти в аукционе</button></div>` : "";
+    return `<div class="lot-wrap"><label class="lot-row ${bought ? "purchased" : ""}" data-id="${esc(id)}" data-name="${esc(r.cells[0])}">${check}<span class="lot-name"><b class="item-gem ${tone}"></b><span><strong>${esc(r.cells[0])}</strong><small>ROI ${esc(roiText || "—")}</small></span></span><span class="price">${esc(r.cells[4])}</span><span class="profit">${esc(r.cells[7])}<i><b style="width:${roi}%"></b></i></span><span class="hourly">${esc(r.cells[10] || "")}</span></label>${more}</div>`;
   }).join("");
-  box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="5">Прогон найдёт подходящие лоты</td></tr>'}</tbody></table>`;
-  box.querySelectorAll("th[data-i]").forEach(th => th.onclick = () => {
-    const i = Number(th.dataset.i);
-    const prev = state.sort.buys;
-    state.sort.buys = {i, desc: prev && prev.i === i ? !prev.desc : true};
-    paint("buys");
-  });
-  box.querySelectorAll("tr.face").forEach(tr => tr.onclick = () => {
-    state.openBuy = state.openBuy === tr.dataset.id ? "" : tr.dataset.id;
+  box.querySelectorAll(".lot-row").forEach(row => row.onclick = (event) => {
+    if (event.target.closest(".buy-check")) return;
+    state.openBuy = state.openBuy === row.dataset.id ? "" : row.dataset.id;
     paint("buys");
   });
   box.querySelectorAll("input.got").forEach(input => {
@@ -1376,18 +1373,16 @@ function paintBuys(box, rows, rule) {
     input.onchange = async () => {
       const deal = state.buyDeals[input.dataset.key];
       if (!deal) return;
-      if (!input.checked) {
-        input.checked = true;
-        return;
-      }
+      if (!input.checked) { input.checked = true; return; }
       const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell, deal.qty);
       if (res && res.ok !== false) state.book = res.rows || [];
       if (!res || res.ok === false) input.checked = false;
+      else paint("buys");
     };
   });
   box.querySelectorAll("button.ingame").forEach(btn => btn.onclick = (event) => {
     event.stopPropagation();
-    const row = btn.closest("tr").previousElementSibling;
+    const row = btn.closest(".lot-wrap").querySelector(".lot-row");
     pywebview.api.game_search(row ? row.dataset.name : "");
   });
 }
@@ -1567,23 +1562,16 @@ function build() {
   const tabs = $("tabs");
   const main = $("main");
   TAB_ORDER.forEach((key, n) => {
-    const b = document.createElement("button");
-    b.textContent = TAB_NAME[key];
-    b.dataset.key = key;
-    b.className = n ? "" : "on";
-    b.onclick = () => show(key);
-    tabs.appendChild(b);
+    tabs.appendChild(tabButton(key, TAB_NAME[key], n === 0));
     const view = document.createElement("div");
     view.className = "view" + (n ? "" : " on");
     view.id = "v-" + key;
-    view.innerHTML = `<div class="page"><div class="page-head"><h2>${TAB_NAME[key]}</h2><p>${TAB_BLURB[key] || ""}</p></div><div class="sheet" id="t-${key}"></div></div>`;
+    view.innerHTML = key === "buys"
+      ? `<section class="lots panel"><div class="table-head"><span>КУПИЛ</span><span>ПРЕДМЕТ</span><span>КУПИТЬ</span><span>ПЛЮС</span><span>В ЧАС</span></div><div class="lots-list" id="t-buys"></div></section>`
+      : `<div class="page"><div class="page-head"><h2>${TAB_NAME[key]}</h2><p>${TAB_BLURB[key] || ""}</p></div><div class="sheet" id="t-${key}"></div></div>`;
     main.appendChild(view);
   });
-  const b = document.createElement("button");
-  b.textContent = "Аукцион";
-  b.dataset.key = "auc";
-  b.onclick = () => show("auc");
-  tabs.appendChild(b);
+  tabs.appendChild(tabButton("auc", "Аукцион", false));
   const view = document.createElement("div");
   view.className = "view";
   view.id = "v-auc";
@@ -1614,20 +1602,16 @@ function build() {
       </aside>
     </div>`;
   main.appendChild(view);
-  const mapBtn = document.createElement("button");
-  mapBtn.textContent = "Карта";
-  mapBtn.dataset.key = "map";
-  mapBtn.onclick = () => show("map");
-  tabs.appendChild(mapBtn);
+  tabs.appendChild(tabButton("map", "Карта", false));
+  const logBtn = tabButton("log", "Лог", false);
+  logBtn.onclick = () => pywebview.api.open_log();
+  tabs.appendChild(logBtn);
   const mapView = document.createElement("div");
   mapView.className = "view";
   mapView.id = "v-map";
   mapView.innerHTML = `<div class="mapwrap"><div class="tools" id="mapbar"></div><div id="mapstatus" role="status" style="padding:4px 8px;color:var(--dim)">Карты Лунара загрузятся при открытии вкладки.</div><div class="tools" id="maplayers"></div><div id="wikimap"></div></div>`;
   main.appendChild(mapView);
-  const bookBtn = document.createElement("button");
-  bookBtn.textContent = "Учёт";
-  bookBtn.dataset.key = "book";
-  bookBtn.onclick = () => show("book");
+  const bookBtn = tabButton("book", "Учёт", false);
   tabs.insertBefore(bookBtn, tabs.children[1] || null);
   const bookView = document.createElement("div");
   bookView.className = "view";
@@ -2154,6 +2138,7 @@ function show(key) {
   document.body.dataset.screen = key;
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.key === key));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + key));
+  if ($("screen-title")) $("screen-title").textContent = TAB_NAME[key] || {book:"Учёт", auc:"Аукцион", map:"Карта"}[key] || key;
   if (key === "auc" && !state.catalog.length) loadCatalog();
   if (key === "book") {
     loadBook();
@@ -2351,11 +2336,10 @@ function wire() {
 
 async function tick() {
   const data = await pywebview.api.poll();
-  $("status").textContent = data.status || "";
+  const short = data.busy ? "В работе" : "Онлайн";
+  $("status").textContent = short;
   $("status").title = data.status || "";
-  if ($("side-status")) $("side-status").textContent = data.status || "";
   const budgetText = prettyMoney($("budget").value || "");
-  if ($("side-budget")) $("side-budget").textContent = budgetText;
   if ($("stat-count")) {
     const rows = data.compact || [];
     const gain = rows.reduce((sum, row) => sum + (Number(row.gain_n) || 0), 0);
@@ -2365,21 +2349,13 @@ async function tick() {
     $("stat-live").textContent = data.busy ? "скан" : "ждёт";
   }
   if (data.catalog) applyCatalog(data.catalog);
-  $("log").textContent = (data.logs || []).join("\n");
-  $("log").scrollTop = $("log").scrollHeight;
   ["run","auto","live","mins","budget"].forEach(id => $(id).disabled = !!data.busy);
   $("stop").disabled = !data.busy;
-  const hud = data.hud || {};
-  document.body.classList.add("full");
-  $("hudhint").textContent = !hud.hotkey ? "Горячая клавиша занята другой копией — закройте её и перезапустите оверлей" :
-    (hud.interactive ? "УПРАВЛЕНИЕ · Esc — в игру" : "ПРОСМОТР · F10 — управление") +
-    (hud.game ? "" : " · окно игры не найдено");
   if (data.rev !== state.rev) {
     state.rev = data.rev;
     state.tables = data.tables || {};
     TAB_ORDER.forEach(paint);
   }
-  if (state.wiki) setTimeout(() => { try { state.wiki.invalidateSize(); } catch (e) {} }, 100);
 }
 
 window.addEventListener("pywebviewready", async () => {
@@ -2392,14 +2368,14 @@ window.addEventListener("pywebviewready", async () => {
   state.catKeys = await pywebview.api.cat_keys();
   await loadBook();
   wire();
-  $("backgame").onclick = () => pywebview.api.hud_action("passive");
   $("closehud").onclick = () => pywebview.api.hud_action("close");
+  $("menu-toggle").onclick = () => {
+    const shell = $("full");
+    const open = shell.classList.toggle("menu-open");
+    $("menu-toggle").setAttribute("aria-label", open ? "Закрыть меню" : "Открыть меню");
+  };
+  $("quickstop") && ($("quickstop").onclick = () => pywebview.api.stop_run());
   document.querySelectorAll("[data-order]").forEach(b => b.onclick = () => setOrder(state.order === "hour" ? "gain" : "hour"));
-  document.addEventListener("keydown", e => {
-    if (e.key !== "Escape" || $("ask").classList.contains("on")) return;
-    e.preventDefault();
-    pywebview.api.hud_action("passive");
-  });
   TAB_ORDER.forEach(paint);
   setInterval(tick, 400);
   tick();
@@ -2427,12 +2403,13 @@ def main():
     webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
     window = webview.create_window("STALZONE — карта и оверлей", html=PAGE, js_api=bridge,
         width=1280, height=820, min_size=(960, 640), frameless=True,
-        easy_drag=False, on_top=True, hidden=True, background_color='#12100e')
+        easy_drag=False, on_top=True, hidden=True, background_color='#080d11')
     hud = HudController(window, folder / 'overlay_settings.json')
     bridge._hud = hud
     window.events.loaded += hud.start
     def closing():
         agent.HALT.set()
+        bridge.close_log()
         hud.closing()
     window.events.closing += closing
     window.events.closed += hud.stop
