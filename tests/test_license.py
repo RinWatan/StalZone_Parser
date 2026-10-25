@@ -44,6 +44,17 @@ class LicenseTests(unittest.TestCase):
         self.assertTrue(again["active"])
         self.assertEqual(again["role"], "owner")
 
+    def test_drop_closes_access_but_keeps_the_pc_binding(self):
+        key = lic.issue(30)
+        lic.activate(key, self.root, machine="pc-a", ip="10.0.0.2", now=1_000)
+        closed = lic.drop(self.root)
+        self.assertFalse(closed["active"])
+        self.assertEqual(closed["reason"], "Нет ключа")
+        again = lic.activate(key, self.root, machine="pc-a", ip="10.0.0.4", now=1_000 + lic.DAY)
+        self.assertEqual(again["days_left"], 29)
+        other = lic.activate(key, self.root, machine="pc-b", ip="10.0.0.9", now=2_000)
+        self.assertFalse(other["active"])
+
     def test_broken_key_is_refused(self):
         refused = lic.activate("not-a-key", self.root, machine="pc-a", ip="1.1.1.1", now=1)
         self.assertFalse(refused["active"])

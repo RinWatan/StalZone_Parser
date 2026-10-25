@@ -188,6 +188,15 @@ def activate(key, root=None, machine=None, ip=None, host=None, now=None):
     return _view(seat, moment)
 
 
+def drop(root=None):
+    path = _seat_path(root)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return status(root)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Выпустить ключ STALZONE")
     parser.add_argument("kind", nargs="?", default="30", help="Число дней или owner")
