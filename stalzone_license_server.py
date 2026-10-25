@@ -209,7 +209,7 @@ def describe(row, now):
         state = "срок кончился"
     else:
         left = max(0, int((float(row["expires"]) - now + lic.DAY - 1) // lic.DAY))
-        state = f"идёт · ещё {left} дн."
+        state = f"вошёл · ещё {left} дн."
     return f"{row['id']} · {state}"
 
 

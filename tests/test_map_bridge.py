@@ -15,9 +15,12 @@ class BridgeTests(unittest.TestCase):
         self.patcher.start()
         self.license_root = patch('stalzone_license._root', lambda root=None: Path(self.temp.name))
         self.license_root.start()
+        self.no_server = patch('stalzone_license.server_url', lambda: "")
+        self.no_server.start()
         lic.activate(lic.issue_owner(), self.temp.name, ip="127.0.0.1")
         self.bridge = Bridge()
     def tearDown(self):
+        self.no_server.stop()
         self.license_root.stop()
         self.patcher.stop()
         self.temp.cleanup()

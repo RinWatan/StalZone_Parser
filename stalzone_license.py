@@ -21,9 +21,8 @@ _SECRET = b"stalzone-seat-v1-7c4e9a1b"
 DAY = 86400
 # Сюда ставится страница оплаты. Пока пусто, кнопка скажет, что ссылки ещё нет.
 BUY_URL = ""
-# Адрес сервера ключей. Пусто — проверка только на этом ПК.
-# Рядом с программой файл license_server.url перекрывает эту строку.
-SERVER_URL = ""
+# Адрес сервера ключей. Файл license_server.url рядом с программой перекрывает эту строку.
+SERVER_URL = "http://127.0.0.1:8787"
 
 
 def _b64(raw):
@@ -201,6 +200,8 @@ def status(root=None, now=None):
     seat = _load_seat(root)
     if seat and seat.get("broken"):
         return {"ok": True, "active": False, "reason": "Ключ не подходит"}
+    if root is None and server_url() and seat and not seat.get("remote"):
+        return {"ok": True, "active": False, "reason": "Введи ключ ещё раз: прошлый вход сервер не видел"}
     current = machine_id(root)
     if seat and seat.get("machine") != current:
         return {"ok": True, "active": False, "reason": "Ключ привязан к другому ПК"}
