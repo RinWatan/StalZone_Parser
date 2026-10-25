@@ -13,9 +13,12 @@ class BridgeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.patcher = patch.object(agent, 'DIR', Path(self.temp.name))
         self.patcher.start()
+        self.license_root = patch('stalzone_license._root', lambda root=None: Path(self.temp.name))
+        self.license_root.start()
         lic.activate(lic.issue_owner(), self.temp.name, ip="127.0.0.1")
         self.bridge = Bridge()
     def tearDown(self):
+        self.license_root.stop()
         self.patcher.stop()
         self.temp.cleanup()
     def test_compact_deals_share_results_and_clear(self):

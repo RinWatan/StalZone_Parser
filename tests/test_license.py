@@ -55,6 +55,21 @@ class LicenseTests(unittest.TestCase):
         other = lic.activate(key, self.root, machine="pc-b", ip="10.0.0.9", now=2_000)
         self.assertFalse(other["active"])
 
+    def test_logout_does_not_give_the_unused_days_back(self):
+        key = lic.issue(30)
+        lic.activate(key, self.root, machine="pc-a", ip="10.0.0.2", now=1_000)
+        lic.drop(self.root)
+        late = lic.activate(key, self.root, machine="pc-a", ip="10.0.0.4", now=1_000 + 29 * lic.DAY)
+        self.assertTrue(late["active"])
+        self.assertEqual(late["days_left"], 1)
+        lic.drop(self.root)
+        dead = lic.activate(key, self.root, machine="pc-a", ip="10.0.0.4", now=1_000 + 30 * lic.DAY)
+        self.assertFalse(dead["active"])
+        self.assertEqual(dead["reason"], "Срок ключа кончился")
+        again = lic.activate(key, self.root, machine="pc-a", ip="10.0.0.4", now=1_000 + 40 * lic.DAY)
+        self.assertFalse(again["active"])
+        self.assertEqual(again["reason"], "Срок ключа кончился")
+
     def test_broken_key_is_refused(self):
         refused = lic.activate("not-a-key", self.root, machine="pc-a", ip="1.1.1.1", now=1)
         self.assertFalse(refused["active"])

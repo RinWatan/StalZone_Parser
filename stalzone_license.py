@@ -1,17 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Ключи подписки. Срок начинается, когда ключ вставили на этом ПК."""
+"""Ключи подписки.
+
+Обычный ключ открывает один человек, когда сам его вставит.
+С этого момента срок идёт без паузы: выход из подписки дни не возвращает.
+"""
 import argparse
 import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import socket
+import sys
 import time
 import uuid
 from pathlib import Path
-
-import stalzone_agent as agent
 
 _SECRET = b"stalzone-seat-v1-7c4e9a1b"
 DAY = 86400
@@ -33,7 +37,15 @@ def _sign(body):
 
 
 def _root(root):
-    return Path(root) if root is not None else agent.DIR
+    if root is not None:
+        return Path(root)
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home())
+        folder = Path(base) / "STALZONE"
+    else:
+        folder = Path.home() / ".stalzone"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def _read(path, fallback):
@@ -166,12 +178,19 @@ def activate(key, root=None, machine=None, ip=None, host=None, now=None):
             if row.get("key_id") == payload["id"] and row.get("machine") not in (None, "", pc):
                 return {"ok": False, "active": False, "reason": "Этот ключ уже привязан к другому ПК"}
     previous = next((row for row in book if row.get("key_id") == payload["id"] and row.get("machine") == pc), None)
-    if previous:
+    if previous and previous.get("expires") not in (None, "") and moment >= float(previous["expires"]):
+        return {"ok": False, "active": False, "reason": "Срок ключа кончился"}
+    if previous and previous.get("expires") not in (None, ""):
+        expires = float(previous["expires"])
+        started = float(previous.get("activated") or expires)
+    elif previous:
         started = float(previous.get("activated") or moment)
+        days = payload.get("days")
+        expires = None if payload["role"] == "owner" or days in (None, "") else started + int(days) * DAY
     else:
         started = moment
-    days = payload.get("days")
-    expires = None if payload["role"] == "owner" or days in (None, "") else started + int(days) * DAY
+        days = payload.get("days")
+        expires = None if payload["role"] == "owner" or days in (None, "") else started + int(days) * DAY
     seat = {
         "key_id": payload["id"],
         "role": payload["role"],
