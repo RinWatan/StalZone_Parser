@@ -38,17 +38,42 @@ def _sign(body):
     return _b64(hmac.new(_SECRET, body.encode(), hashlib.sha256).digest())
 
 
+def _url_from_text(text):
+    for line in str(text or "").splitlines():
+        line = line.strip().lstrip("\ufeff")
+        if line.lower().startswith("url="):
+            return line.split("=", 1)[1].strip()
+    for part in str(text or "").replace("\ufeff", "").split():
+        if part.startswith(("http://", "https://")):
+            return part
+    return ""
+
+
+def _read_url_file(path):
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    for encoding in ("utf-8-sig", "utf-16"):
+        try:
+            found = _url_from_text(raw.decode(encoding))
+        except UnicodeError:
+            continue
+        if found:
+            return found
+    return ""
+
+
 def server_url():
     env = os.environ.get("STALZONE_LICENSE_URL", "").strip()
     if env:
         return env
-    path = _program_dir() / "license_server.url"
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        text = ""
-    if text:
-        return text.split()[0]
+    here = _program_dir()
+    for directory in (here, here / "Сервер", here.parent, Path.cwd()):
+        for name in ("license_server.txt", "license_server.url"):
+            found = _read_url_file(directory / name)
+            if found:
+                return found
     return (SERVER_URL or "").strip()
 
 

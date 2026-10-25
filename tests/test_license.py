@@ -75,6 +75,11 @@ class LicenseTests(unittest.TestCase):
         self.assertFalse(refused["active"])
         self.assertEqual(refused["reason"], "Ключ не подходит")
 
+    def test_windows_shortcut_still_gives_the_server_address(self):
+        text = "[InternetShortcut]\nURL=http://127.0.0.1:8787/\n"
+        self.assertEqual(lic._url_from_text(text), "http://127.0.0.1:8787/")
+        self.assertEqual(lic._url_from_text("http://127.0.0.1:8787\n"), "http://127.0.0.1:8787")
+
 
 if __name__ == "__main__":
     unittest.main()
