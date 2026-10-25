@@ -122,6 +122,20 @@ class LedgerTests(unittest.TestCase):
         day = datetime.now(agent.MSK).date()
         self.assertEqual(day, book.load()[0]["date"])
 
+    def test_rarity_and_point_stay_in_the_sheet_and_color_the_row(self):
+        self.assertTrue(book.add("Спираль", 80000, 100000, 1, qlt="Обычный", ptn="+0"))
+        self.assertTrue(book.add("Спираль", 80000, 120000, 1, qlt="Исключительный", ptn="+15"))
+        rows = book.load()
+        self.assertEqual(["Обычный", "Исключительный"], [row["qlt"] for row in rows])
+        self.assertEqual(["+0", "+15"], [row["ptn"] for row in rows])
+        book.set_mark(rows[0]["id"], "Редкий", "+3")
+        again = book.load()[0]
+        self.assertEqual("Редкий", again["qlt"])
+        self.assertEqual("+3", again["ptn"])
+        self.assertEqual("Спираль", again["name"])
+        shot = book.snapshot()
+        self.assertEqual("Редкий", shot["rows"][0]["qlt"])
+
 
 if __name__ == "__main__":
     unittest.main()
