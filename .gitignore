@@ -22,6 +22,9 @@ flip_budget.txt
 license.json
 license_registry.json
 machine.id
+license_server.json
+license_server.db
+license_server.url
 STALZONE-friends/
 STALZONE-friends.zip
 overlay_settings.json

@@ -21,6 +21,9 @@ _SECRET = b"stalzone-seat-v1-7c4e9a1b"
 DAY = 86400
 # Сюда ставится страница оплаты. Пока пусто, кнопка скажет, что ссылки ещё нет.
 BUY_URL = ""
+# Адрес сервера ключей. Пусто — проверка только на этом ПК.
+# Рядом с программой файл license_server.url перекрывает эту строку.
+SERVER_URL = ""
 
 
 def _b64(raw):
@@ -34,6 +37,52 @@ def _unb64(text):
 
 def _sign(body):
     return _b64(hmac.new(_SECRET, body.encode(), hashlib.sha256).digest())
+
+
+def server_url():
+    env = os.environ.get("STALZONE_LICENSE_URL", "").strip()
+    if env:
+        return env
+    path = _program_dir() / "license_server.url"
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    if text:
+        return text.split()[0]
+    return (SERVER_URL or "").strip()
+
+
+def pack_lease(seat):
+    payload = {
+        "v": 1,
+        "key_id": seat.get("key_id") or "",
+        "role": seat.get("role") or "user",
+        "label": seat.get("label") or "",
+        "machine": seat.get("machine") or "",
+        "activated": seat.get("activated"),
+        "expires": seat.get("expires"),
+    }
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode())
+    return body + "." + _sign(body)
+
+
+def unpack_lease(lease):
+    parts = str(lease or "").split(".")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError("Ключ не подходит")
+    if not hmac.compare_digest(_sign(parts[0]), parts[1]):
+        raise ValueError("Ключ не подходит")
+    data = json.loads(_unb64(parts[0]).decode())
+    if data.get("v") != 1 or not data.get("key_id") or not data.get("machine"):
+        raise ValueError("Ключ не подходит")
+    return data
+
+
+def _program_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
 
 def _root(root):
@@ -149,16 +198,105 @@ def _view(seat, now):
 
 
 def status(root=None, now=None):
-    seat = _read(_seat_path(root), None)
-    if not isinstance(seat, dict):
-        seat = None
+    seat = _load_seat(root)
+    if seat and seat.get("broken"):
+        return {"ok": True, "active": False, "reason": "Ключ не подходит"}
     current = machine_id(root)
     if seat and seat.get("machine") != current:
         return {"ok": True, "active": False, "reason": "Ключ привязан к другому ПК"}
-    return _view(seat, time.time() if now is None else now)
+    moment = time.time() if now is None else now
+    if root is None and seat and seat.get("remote") and seat.get("key") and server_url():
+        fresh = _ask_server(seat["key"], current, server_url())
+        if fresh is not None:
+            if fresh.get("active") or fresh.get("reason") == "Срок ключа кончился":
+                _save_remote(fresh, seat["key"], root)
+            return fresh
+    return _view(seat, moment)
+
+
+def _load_seat(root):
+    raw = _read(_seat_path(root), None)
+    if not isinstance(raw, dict):
+        return None
+    if not raw.get("lease"):
+        return raw
+    try:
+        signed = unpack_lease(raw["lease"])
+    except Exception:
+        return {"broken": True}
+    signed["key"] = raw.get("key") or ""
+    signed["remote"] = True
+    signed["ip"] = raw.get("ip") or ""
+    signed["host"] = raw.get("host") or ""
+    signed["lease"] = raw["lease"]
+    return signed
+
+
+def _save_remote(result, key, root):
+    if not result.get("lease"):
+        return
+    try:
+        signed = unpack_lease(result["lease"])
+    except Exception:
+        return
+    folder = _root(root)
+    folder.mkdir(parents=True, exist_ok=True)
+    seat = dict(signed)
+    seat["key"] = key
+    seat["remote"] = True
+    seat["lease"] = result["lease"]
+    seat["ip"] = result.get("ip") or ""
+    seat["host"] = result.get("host") or ""
+    _seat_path(folder).write_text(json.dumps(seat, ensure_ascii=False), encoding="utf-8")
+
+
+def _ask_server(key, machine, url):
+    import urllib.request
+    body = json.dumps({"key": key, "machine": machine}).encode()
+    request = urllib.request.Request(
+        url.rstrip("/") + "/v1/activate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            data = json.loads(response.read().decode())
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("lease"):
+        try:
+            unpack_lease(data["lease"])
+        except Exception:
+            return {"ok": False, "active": False, "reason": "Ключ не подходит"}
+    return data
 
 
 def activate(key, root=None, machine=None, ip=None, host=None, now=None):
+    if root is None and server_url():
+        return _activate_remote(key, machine=machine, ip=ip, host=host)
+    return _activate_local(key, root=root, machine=machine, ip=ip, host=host, now=now)
+
+
+def _activate_remote(key, machine=None, ip=None, host=None):
+    folder = _root(None)
+    pc = machine or machine_id(folder)
+    result = _ask_server(key, pc, server_url())
+    if result is None:
+        cached = _load_seat(None)
+        if cached and not cached.get("broken") and cached.get("key") == str(key).strip() and cached.get("machine") == pc:
+            view = _view(cached, time.time())
+            if view.get("active"):
+                return view
+        return {"ok": False, "active": False, "reason": "Сервер подписки недоступен"}
+    if result.get("active"):
+        _save_remote(result, str(key).strip(), None)
+    return result
+
+
+def _activate_local(key, root=None, machine=None, ip=None, host=None, now=None):
     try:
         payload = decode(key)
     except Exception as error:
@@ -222,6 +360,9 @@ def main():
     parser = argparse.ArgumentParser(description="Выпустить ключ STALZONE")
     parser.add_argument("kind", nargs="?", default="30", help="Число дней или owner")
     args = parser.parse_args()
+    if server_url():
+        print("Ключи выпускает бот на сервере. Эта команда их больше не создаёт.")
+        return
     if str(args.kind).lower() in ("owner", "владелец"):
         print(issue_owner())
         return
