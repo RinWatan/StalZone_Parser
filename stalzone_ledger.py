@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 
 import stalzone_agent as agent
 
-HEADERS = ["Дата", "Предмет", "Куплено", "Штук", "Продано", "После 5%", "Плюс", "Своя", "id"]
+HEADERS = ["Дата", "Предмет", "Редкость", "Точка", "Куплено", "Штук", "Продано", "После 5%", "Плюс", "Своя", "id"]
 _LOCK = threading.Lock()
 _MONEY = {"Куплено", "Продано", "После 5%", "Плюс"}
 
@@ -79,6 +79,11 @@ def _at(cells, headers, title):
     return cells[index].value
 
 
+def _mark(value):
+    text = str(value or "").strip()
+    return "" if text in {"—", "-"} else text
+
+
 def _read(cells, headers):
     sell_raw = _at(cells, headers, "Продано")
     sell = _as_int(sell_raw)
@@ -90,6 +95,8 @@ def _read(cells, headers):
     return {
         "date": _as_date(_at(cells, headers, "Дата")),
         "name": str(_at(cells, headers, "Предмет") or "").strip(),
+        "qlt": _mark(_at(cells, headers, "Редкость")),
+        "ptn": _mark(_at(cells, headers, "Точка")),
         "buy": buy,
         "qty": _as_count(_at(cells, headers, "Штук")),
         "sell": sell,
@@ -112,7 +119,7 @@ def _load_locked():
     headers = _header_map(ws)
     name_at = headers.get("Предмет", 1)
     rows = []
-    dirty = "Штук" not in headers or "Своя" not in headers
+    dirty = any(title not in headers for title in ("Штук", "Своя", "Редкость", "Точка"))
     for cells in ws.iter_rows(min_row=2):
         if name_at >= len(cells) or cells[name_at].value is None or str(cells[name_at].value).strip() == "":
             continue
@@ -148,7 +155,8 @@ def _write_locked(rows):
         row["net"] = net
         row["gain"] = gain
         values = [
-            row["date"], row["name"], int(row["buy"] or 0), row.get("qty"),
+            row["date"], row["name"], row.get("qlt") or "", row.get("ptn") or "",
+            int(row["buy"] or 0), row.get("qty"),
             row["sell"], net, gain, 1 if row.get("hand") else 0, row["id"],
         ]
         for col, value in enumerate(values, start=1):
@@ -161,13 +169,13 @@ def _write_locked(rows):
                     cell.number_format = "#,##0"
             if title == "Плюс" and isinstance(value, int):
                 cell.font = Font(color="1F7A4D" if value >= 0 else "A33B3B")
-    widths = (14, 42, 16, 12, 16, 16, 16, 10, 14)
+    widths = (14, 42, 18, 12, 16, 12, 16, 16, 16, 10, 14)
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
-    ws.column_dimensions["H"].hidden = True
-    ws.column_dimensions["I"].hidden = True
+    ws.column_dimensions["J"].hidden = True
+    ws.column_dimensions["K"].hidden = True
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:G{max(1, len(rows) + 1)}"
+    ws.auto_filter.ref = f"A1:I{max(1, len(rows) + 1)}"
     tmp = path.with_suffix(".tmp.xlsx")
     try:
         wb.save(tmp)
@@ -182,24 +190,28 @@ def load():
         return _load_locked()
 
 
-def add(name, buy, sell, qty=None, hand=False):
+def add(name, buy, sell, qty=None, hand=False, qlt="", ptn=""):
     title = str(name or "").strip()
     if not title:
         raise ValueError("Нет названия")
     bought = int(buy or 0)
     sold = int(sell or 0) or None
     count = None if qty in (None, "") else int(qty)
+    quality = _mark(qlt)
+    point = _mark(ptn)
     own = bool(hand)
     with _LOCK:
         rows = _load_locked()
         today = _today()
         if not own:
             for row in rows:
-                if row["date"] == today and row["name"] == title and row["buy"] == bought:
+                if row["date"] == today and row["name"] == title and row["buy"] == bought and row.get("qlt") == quality and row.get("ptn") == point:
                     return False
         rows.append({
             "date": today,
             "name": title,
+            "qlt": quality,
+            "ptn": point,
             "buy": bought,
             "qty": count,
             "sell": sold,
@@ -220,6 +232,23 @@ def _change(row_id, field, value):
                 continue
             found = True
             row[field] = value
+            break
+        if not found:
+            raise ValueError("Строки нет в учёте")
+        _write_locked(rows)
+
+
+def set_mark(row_id, qlt, ptn):
+    ident = str(row_id or "").strip()
+    with _LOCK:
+        rows = _load_locked()
+        found = False
+        for row in rows:
+            if row["id"] != ident:
+                continue
+            found = True
+            row["qlt"] = _mark(qlt)
+            row["ptn"] = _mark(ptn)
             break
         if not found:
             raise ValueError("Строки нет в учёте")
@@ -306,6 +335,8 @@ def snapshot():
             "date": row["date"].isoformat(),
             "date_ru": row["date"].strftime("%d.%m.%Y"),
             "name": row["name"],
+            "qlt": row.get("qlt") or "",
+            "ptn": row.get("ptn") or "",
             "buy": row["buy"],
             "qty": row.get("qty"),
             "sell": row["sell"],

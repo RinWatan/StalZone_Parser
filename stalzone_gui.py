@@ -94,9 +94,6 @@ def rows_from(data):
             spent = int(r.get("spend") or 0) or int(r.get("buyout") or 0) * copies
             asked = int(round(float(r.get("med") or 0) * amount * copies))
             label = r["name"]
-            extra = " ".join(part for part in (r.get("qlt") or "", r.get("ptn") or "") if part and part != "—")
-            if extra:
-                label = f"{label}, {extra}"
             buys.append({
                 "cells": [
                     r["name"], r.get("qlt") or "—", r.get("ptn") or "—",
@@ -107,7 +104,14 @@ def rows_from(data):
                     r.get("plan") or "ВЫКУПИТЬ",
                 ],
                 "tag": tag,
-                "deal": {"name": label, "buy": spent, "sell": asked, "qty": copies * amount},
+                "deal": {
+                    "name": label,
+                    "buy": spent,
+                    "sell": asked,
+                    "qty": copies * amount,
+                    "qlt": r.get("qlt") or "",
+                    "ptn": r.get("ptn") or "",
+                },
             })
         tables["buys"] = buys
     if "farm" in data:
@@ -703,10 +707,10 @@ class Bridge:
             self.note(str(error))
             return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
 
-    def ledger_add(self, name, buy, sell, qty=None):
+    def ledger_add(self, name, buy, sell, qty=None, qlt="", ptn=""):
         try:
             count = None if qty in (None, "") else int(float(qty))
-            created = book.add(name, int(float(buy or 0)), int(float(sell or 0)), count)
+            created = book.add(name, int(float(buy or 0)), int(float(sell or 0)), count, qlt=qlt, ptn=ptn)
             self.note(("В учёте: " if created else "Уже в учёте сегодня: ") + str(name))
             snap = book.snapshot()
             snap["created"] = created
@@ -715,12 +719,20 @@ class Bridge:
             self.note(str(error))
             return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
 
-    def ledger_hand(self, name, buy, sell, qty=None):
+    def ledger_hand(self, name, buy, sell, qty=None, qlt="", ptn=""):
         try:
             count = None if str(qty or "").strip() == "" else int(agent.parse_money(qty))
             sold = agent.parse_money(sell) if str(sell or "").strip() else 0
-            book.add(str(name or "").strip(), agent.parse_money(buy), sold, count, hand=True)
+            book.add(str(name or "").strip(), agent.parse_money(buy), sold, count, hand=True, qlt=qlt, ptn=ptn)
             self.note("Своя позиция: " + str(name))
+            return book.snapshot()
+        except Exception as error:
+            self.note(str(error))
+            return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def ledger_mark(self, row_id, qlt, ptn):
+        try:
+            book.set_mark(row_id, qlt, ptn)
             return book.snapshot()
         except Exception as error:
             self.note(str(error))
@@ -1050,6 +1062,16 @@ PAGE = r"""<!DOCTYPE html>
   #bookbox td.num { text-align: right; font-variant-numeric: tabular-nums; }
   #bookbox .plus { color: var(--green); }
   #bookbox .minus { color: #e07a7a; }
+  #bookbox tr.tone-common { --frame: #f4f1ea; }
+  #bookbox tr.tone-newbie { --frame: #9ddeaf; }
+  #bookbox tr.tone-stalker { --frame: #8ebfff; }
+  #bookbox tr.tone-veteran { --frame: #c4a3ff; }
+  #bookbox tr.tone-master { --frame: #e07a7a; }
+  #bookbox tr.tone-legend { --frame: #e0b15a; }
+  #bookbox tr[class*="tone-"] td { border-top: 1px solid var(--frame); border-bottom: 1px solid var(--frame); }
+  #bookbox tr[class*="tone-"] td:first-child { border-left: 1px solid var(--frame); }
+  #bookbox tr[class*="tone-"] td:last-child { border-right: 1px solid var(--frame); }
+  button.ingame { border: 1px solid #313b42; border-radius: 8px; background: #10161a; color: #e9eaeb; padding: 6px 10px; }
   .auc { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(280px, 1fr) minmax(300px, 380px); }
   .filters, .detail { min-height: 0; overflow: auto; padding: 14px; background: var(--side); }
   .filters { border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
@@ -1170,11 +1192,15 @@ const TAB_BLURB = {
   protos: "Протоартефакты, если после комиссии есть запас."
 };
 const TAB_NAME = {buys:"Выкуп", farm:"Фарм", arsenal:"Арсенал", shelter_buy:"Убежище купить", shelter_sell:"Убежище продать", consumables:"Расходники", arts:"Арты", protos:"Протоартефакты"};
-const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}, byName:new Map()};
+const state = {columns:{}, tables:{}, rev:-1, sort:{}, detailRequest:0, catalog:[], fav:new Set(), recent:[], lot:"now", mapOpened:false, mapBooted:false, local:false, mapSlug:"south-zone", wiki:null, pack:null, marks:null, mine:[], placing:false, hidden:{}, icons:{}, order:"gain", openBuy:"", openRow:"", book:[], bookPath:"", picked:new Set(), buyDeals:{}, byName:new Map()};
 const TAB_ICON = {buys:"cart", book:"clipboard", farm:"sprout", arsenal:"shield", shelter_buy:"home", shelter_sell:"home", consumables:"capsule", arts:"diamond", protos:"flask", auc:"gavel", map:"pin", log:"log"};
 const $ = (id) => document.getElementById(id);
 const RANK_TONE = {RANK_LEGEND:"legend", RANK_MASTER:"master", RANK_VETERAN:"veteran", RANK_STALKER:"stalker", RANK_NEWBIE:"newbie", DEFAULT:"common", QUEST_ITEM:"quest"};
 const Q_TONE = ["common", "newbie", "stalker", "veteran", "master", "legend"];
+const Q_BY_NAME = {"Обычный":"q0","Необычный":"q1","Особый":"q2","Редкий":"q3","Исключительный":"q4","Легендарный":"q5"};
+function rarityTag(text) {
+  return Q_BY_NAME[String(text || "").trim()] || "";
+}
 function rememberItems(items) {
   (items || []).forEach(item => {
     if (!item) return;
@@ -1295,11 +1321,16 @@ function paint(key) {
     return;
   }
   const head = cols.map((c, i) => `<th data-i="${i}">${c}${rule && rule.i === i ? (rule.desc ? " ↓" : " ↑") : ""}</th>`).join("");
-  const body = rows.map(r => {
+  const body = rows.map((r, index) => {
+    const id = key + ":" + index;
+    const name = r.cells[0] || "";
     const cells = r.cells.map((c, i) => i === 0
       ? `<td class="named">${gem(c, r.tag)}<span>${esc(c)}</span></td>`
       : `<td>${esc(c)}</td>`);
-    return `<tr class="${r.tag || ""}">${cells.join("")}</tr>`;
+    const more = state.openRow === id
+      ? `<tr class="more"><td colspan="${Math.max(cols.length, 1)}"><button type="button" class="ingame" data-name="${esc(name)}">Найти в аукционе</button></td></tr>`
+      : "";
+    return `<tr class="${r.tag || ""}" data-id="${esc(id)}">${cells.join("")}</tr>${more}`;
   }).join("");
   box.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
   box.querySelectorAll("th").forEach(th => th.onclick = () => {
@@ -1308,7 +1339,14 @@ function paint(key) {
     state.sort[key] = {i, desc: prev && prev.i === i ? !prev.desc : true};
     paint(key);
   });
-  box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => pywebview.api.game_search(tr.cells[0].textContent));
+  box.querySelectorAll("tbody tr[data-id]").forEach(tr => tr.onclick = () => {
+    state.openRow = state.openRow === tr.dataset.id ? "" : tr.dataset.id;
+    paint(key);
+  });
+  box.querySelectorAll("button.ingame").forEach(btn => btn.onclick = (event) => {
+    event.stopPropagation();
+    pywebview.api.game_search(btn.dataset.name);
+  });
 }
 
 function paintBuys(box, rows, rule) {
@@ -1345,7 +1383,7 @@ function paintBuys(box, rows, rule) {
       const deal = state.buyDeals[input.dataset.key];
       if (!deal) return;
       if (!input.checked) { input.checked = true; return; }
-      const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell, deal.qty);
+      const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell, deal.qty, deal.qlt || "", deal.ptn || "");
       if (res && res.ok !== false) state.book = res.rows || [];
       if (!res || res.ok === false) input.checked = false;
       else paint("buys");
@@ -1454,19 +1492,26 @@ function paintBook() {
     const buy = row.hand
       ? `<input class="buy" data-id="${esc(row.id)}" value="${esc(String(row.buy))}">`
       : `<span class="num">${rubExact(row.buy)}</span>`;
-    return `<tr data-buy="${esc(String(row.buy))}">
+    const tag = rarityTag(row.qlt);
+    const frame = tag ? "tone-" + toneOf(row.name, tag) : "";
+    const qltOptions = ["", "Обычный", "Необычный", "Особый", "Редкий", "Исключительный", "Легендарный"]
+      .map(value => `<option value="${esc(value)}"${value === (row.qlt || "") ? " selected" : ""}>${esc(value || "—")}</option>`).join("");
+    return `<tr class="${frame}" data-buy="${esc(String(row.buy))}">
       <td><input type="checkbox" class="pickrow" data-id="${esc(row.id)}"${on}></td>
       <td>${esc(row.date_ru)}</td>
-      <td class="named">${gem(row.name, "")}${name}</td>
+      <td class="named">${gem(row.name, tag)}${name}</td>
+      <td><select class="qlt" data-id="${esc(row.id)}">${qltOptions}</select></td>
+      <td><input class="ptn" data-id="${esc(row.id)}" value="${esc(row.ptn || "")}" placeholder="+0"></td>
       <td class="num">${buy}</td>
       <td><input class="qty" data-id="${esc(row.id)}" value="${esc(qty)}" placeholder="шт"></td>
       <td><input class="sell" data-id="${esc(row.id)}" value="${esc(sold)}" placeholder="за сколько продал"></td>
       <td class="num net">${rubExact(row.net)}</td>
       <td class="num gain ${tone}">${rubExact(row.gain)}</td>
       <td><button type="button" class="drop" data-id="${esc(row.id)}">Убрать</button></td>
+      <td><button type="button" class="ingame" data-name="${esc(row.name)}">Найти в аукционе</button></td>
     </tr>`;
   }).join("");
-  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th></tr></thead><tbody>${body || '<tr><td colspan="9">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
+  box.innerHTML = `<table><thead><tr><th></th><th>Дата</th><th>Предмет</th><th>Редкость</th><th>Точка</th><th>Куплено</th><th>Штук</th><th>Продано</th><th>После 5%</th><th>Плюс</th><th></th><th></th></tr></thead><tbody>${body || '<tr><td colspan="12">Отметь лот на «Выкупе» или добавь свою позицию.</td></tr>'}</tbody></table>`;
   box.querySelectorAll("input.pickrow").forEach(input => input.onchange = () => {
     if (input.checked) state.picked.add(input.dataset.id);
     else state.picked.delete(input.dataset.id);
@@ -1507,6 +1552,16 @@ function paintBook() {
       paintBook();
     }
   });
+  const saveMark = async (input) => {
+    const tr = input.closest("tr");
+    const res = await pywebview.api.ledger_mark(input.dataset.id, tr.querySelector("select.qlt").value, tr.querySelector("input.ptn").value);
+    if (res && res.ok !== false && res.rows) {
+      state.book = res.rows;
+      paintBook();
+    }
+  };
+  box.querySelectorAll("select.qlt, input.ptn").forEach(input => input.onchange = () => saveMark(input));
+  box.querySelectorAll("button.ingame").forEach(btn => btn.onclick = () => pywebview.api.game_search(btn.dataset.name));
   box.querySelectorAll("button.drop").forEach(btn => btn.onclick = async () => {
     const row = (state.book || []).find(item => item.id === btn.dataset.id);
     const name = row && row.name ? row.name : "этот лот";
@@ -1590,7 +1645,7 @@ function build() {
   const bookView = document.createElement("div");
   bookView.className = "view";
   bookView.id = "v-book";
-  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>С выкупа строка встаёт сама. Свою позицию добавляешь сверху: название выбирается из списка, правится всё, кроме даты. После 5% и плюс считаются сразу. На строке с выкупа штуки пересчитывают суммы за штуку.</p><p id="book-file"></p></div><div class="own"><div class="namebox"><input id="own-name" placeholder="Начни вводить предмет" autocomplete="off"><div id="own-list" class="namelist" hidden></div></div><input id="own-buy" placeholder="Куплено"><input id="own-qty" placeholder="Штук"><input id="own-sell" placeholder="Продано"><span class="cut">После 5% <b id="own-net">—</b></span><span class="cut">Плюс <b id="own-gain">—</b></span><button type="button" id="own-add" class="gold">Добавить</button></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
+  bookView.innerHTML = `<div class="page"><div class="page-head"><h2>Учёт</h2><p>С выкупа строка встаёт сама. Свою позицию добавляешь сверху: название выбирается из списка, правится всё, кроме даты. После 5% и плюс считаются сразу. На строке с выкупа штуки пересчитывают суммы за штуку.</p><p id="book-file"></p></div><div class="own"><div class="namebox"><input id="own-name" placeholder="Начни вводить предмет" autocomplete="off"><div id="own-list" class="namelist" hidden></div></div><select id="own-qlt"><option value="">Редкость</option><option>Обычный</option><option>Необычный</option><option>Особый</option><option>Редкий</option><option>Исключительный</option><option>Легендарный</option></select><input id="own-ptn" placeholder="Точка"><input id="own-buy" placeholder="Куплено"><input id="own-qty" placeholder="Штук"><input id="own-sell" placeholder="Продано"><span class="cut">После 5% <b id="own-net">—</b></span><span class="cut">Плюс <b id="own-gain">—</b></span><button type="button" id="own-add" class="gold">Добавить</button></div><div class="bookstats"><div class="stat"><span>Весь плюс</span><b id="book-gain" class="green">0</b></div><div class="stat"><span>Сегодня</span><b id="book-today-gain" class="green">0</b></div><div class="stat"><span>Выделено</span><b id="book-picked" class="green">0</b></div></div><div class="bar"><button type="button" id="book-only-today">Только сегодня</button><button type="button" id="book-all">Выделить всё</button><button type="button" id="book-clear">Снять</button></div><div class="sheet" id="bookbox"></div></div>`;
   main.appendChild(bookView);
   $("book-only-today").onclick = () => {
     state.picked = new Set((state.book || []).filter(row => row.today).map(row => row.id));
@@ -1635,10 +1690,11 @@ function build() {
   $("own-add").onclick = async () => {
     const name = $("own-name").value.trim();
     if (!name) return;
-    const res = await pywebview.api.ledger_hand(name, $("own-buy").value, $("own-sell").value, $("own-qty").value);
+    const res = await pywebview.api.ledger_hand(name, $("own-buy").value, $("own-sell").value, $("own-qty").value, $("own-qlt").value, $("own-ptn").value);
     if (res && res.ok !== false && res.rows) {
       state.book = res.rows;
-      ["own-name", "own-buy", "own-qty", "own-sell"].forEach(id => { $(id).value = ""; });
+      ["own-name", "own-buy", "own-qty", "own-sell", "own-ptn"].forEach(id => { $(id).value = ""; });
+      $("own-qlt").value = "";
       $("own-list").hidden = true;
       previewOwn();
       paintBook();
@@ -2275,7 +2331,8 @@ async function openItem() {
   auctionLoading(true);
   const row = state.catalog.find(i => i.id === selected);
   const name = row ? row.name : selected;
-  $("detail-name").innerHTML = `${gem(name, "", row && row.icon)}<span>${esc(name)}</span>`;
+  $("detail-name").innerHTML = `${gem(name, "", row && row.icon)}<span>${esc(name)}</span><button type="button" class="ingame" id="detail-find">Найти в аукционе</button>`;
+  $("detail-find").onclick = () => pywebview.api.game_search(name);
   $("lotinfo").textContent = name + ": читаю лоты…";
   $("lotstats").textContent = "Считаю среднюю и медиану…";
   let data;
