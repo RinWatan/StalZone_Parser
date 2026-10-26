@@ -3,6 +3,7 @@ import json
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -32,6 +33,26 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(board["ts"], 80)
         self.assertEqual(board["rows"], [{"name": "Ершик"}])
         self.assertEqual(len(self.store.board()["rows"]), 1)
+
+    def test_bought_lot_leaves_the_snapshot(self):
+        self.store.save_board(
+            [
+                {"slug": "keep", "name": "Вихрь", "buyout": 100, "amount": 1},
+                {"slug": "gone", "name": "Ершик", "buyout": 50, "amount": 1},
+            ],
+            2,
+            2,
+            now=1,
+        )
+
+        def lots(slug, pages=1):
+            if slug == "keep":
+                return [{"buyoutPrice": 100, "amount": 1}]
+            return []
+
+        with unittest.mock.patch.object(agent, "live_lots", lots):
+            board = agent.refresh_board(self.store)
+        self.assertEqual([row["name"] for row in board["rows"]], ["Вихрь"])
 
 
 class HubTests(unittest.TestCase):

@@ -631,6 +631,70 @@ def _publish_board(rows, scanned, total):
         log(f"снимок хранилища: {exc}")
 
 
+_BOARD_LOCK = threading.Lock()
+BOARD_RECHECK = 30
+
+
+def _offer_alive(row, lots):
+    buy = int(row.get("buyout") or 0)
+    amt = int(row.get("amount") or 0)
+    if buy <= 0 or amt <= 0:
+        return False
+    for lot in lots or []:
+        if int(lot.get("buyoutPrice") or 0) == buy and int(lot.get("amount") or 0) == amt:
+            return True
+    return False
+
+
+def refresh_board(store=None):
+    """Проверяет только лоты из снимка, без истории и без всего каталога. Купленного уже нет."""
+    store = store or market.open_store(DIR / "market.db")
+    board = store.board()
+    if not board or not board.get("rows"):
+        return board
+    slugs = []
+    seen = set()
+    for row in board["rows"]:
+        slug = row.get("slug")
+        if slug and slug not in seen:
+            seen.add(slug)
+            slugs.append(slug)
+    live = {}
+
+    def one(slug):
+        try:
+            return slug, live_lots(slug, pages=1)
+        except Exception as exc:
+            log(f"{slug}: снимок не сверить ({exc})")
+            return slug, None
+
+    with ThreadPoolExecutor(max_workers=AUCTION_WORKERS) as pool:
+        for slug, lots in pool.map(one, slugs):
+            live[slug] = lots
+    kept = []
+    for row in board["rows"]:
+        lots = live.get(row.get("slug"))
+        if lots is None or _offer_alive(row, lots):
+            kept.append(row)
+    store.save_board(kept, board.get("scanned") or 0, board.get("total") or 0)
+    return store.board()
+
+
+def board_for_team(store=None):
+    store = store or market.open_store(DIR / "market.db")
+    with _BOARD_LOCK:
+        board = store.board()
+        if not board:
+            return {"ts": 0, "scanned": 0, "total": 0, "rows": []}
+        if time.time() - float(board.get("ts") or 0) < BOARD_RECHECK:
+            return board
+        try:
+            return refresh_board(store) or board
+        except Exception as exc:
+            log(f"сверка снимка: {exc}")
+            return board
+
+
 def auction_listing(force=False, status=None):
     """Каталог из официальной базы предметов EXBO. Сайт не вызывается."""
     global _LISTING

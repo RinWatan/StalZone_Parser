@@ -83,8 +83,7 @@ def make_handler(store, token):
                 self._send(200, {"ok": True, "items": catalog_rows()})
                 return
             if path == "/v1/deals":
-                board = store.board() or {"ts": 0, "scanned": 0, "total": 0, "rows": []}
-                self._send(200, {"ok": True, **board})
+                self._send(200, {"ok": True, **agent.board_for_team(store)})
                 return
             self._send(404, {"ok": False, "reason": "Нет такого адреса"})
 
