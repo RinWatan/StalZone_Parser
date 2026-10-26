@@ -87,6 +87,39 @@ def make_handler(store, token):
                 return
             self._send(404, {"ok": False, "reason": "Нет такого адреса"})
 
+        def do_POST(self):
+            if not self._allowed():
+                self._send(403, {"ok": False, "reason": "Нет доступа к хранилищу"})
+                return
+            path = self.path.split("?", 1)[0]
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except Exception:
+                self._send(200, {"ok": False, "reason": "Плохой запрос"})
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            if path == "/v1/slice":
+                items = payload.get("items") or []
+                if not items:
+                    items = [{"id": row["id"], "cat": row.get("cat") or ""} for row in catalog_rows()]
+                slugs = store.claim_slice(items, int(payload.get("n") or 80), str(payload.get("who") or ""))
+                self._send(200, {"ok": True, "slugs": slugs})
+                return
+            if path == "/v1/scan":
+                store.merge_scan(payload.get("deals") or [], payload.get("checked") or [], str(payload.get("who") or ""))
+                board = store.board() or {"ts": 0, "scanned": 0, "total": 0, "rows": []}
+                self._send(200, {"ok": True, **board})
+                return
+            if path == "/v1/bought":
+                key = market.offer_key(payload)
+                if key:
+                    store.bury([key])
+                self._send(200, {"ok": True})
+                return
+            self._send(404, {"ok": False, "reason": "Нет такого адреса"})
+
         def log_message(self, fmt, *args):
             return
 
@@ -115,8 +148,8 @@ def main():
     cfg = load_config()
     store = market.open_store(folder() / "market.db")
     print(f"Хранилище слушает порт {cfg['port']}.")
-    print("Ребятам в hub.url достаточно строки http://IP-этого-ПК:" + str(cfg["port"]))
-    print("Базу копировать им не нужно. Сначала на этом ПК сделай один прогон.")
+    print("Ребятам и этому ПК в hub.url одна строка: http://IP-этого-ПК:" + str(cfg["port"]))
+    print("Каждый прогон берёт свою часть каталога. Находки и купленные лоты общие.")
     serve(cfg["port"], store, cfg["token"])
 
 

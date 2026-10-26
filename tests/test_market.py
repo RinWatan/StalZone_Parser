@@ -54,6 +54,37 @@ class StoreTests(unittest.TestCase):
             board = agent.refresh_board(self.store)
         self.assertEqual([row["name"] for row in board["rows"]], ["Вихрь"])
 
+    def test_two_scans_merge_and_a_bought_lot_does_not_return(self):
+        self.store.merge_scan(
+            [{"slug": "art", "name": "Вихрь", "buyout": 10, "amount": 1, "gain": 5}],
+            ["art"],
+            "я",
+            now=100,
+        )
+        self.store.merge_scan(
+            [{"slug": "mod", "name": "Ершик", "buyout": 7, "amount": 1, "gain": 3}],
+            ["mod"],
+            "друг",
+            now=120,
+        )
+        self.assertEqual({row["name"] for row in self.store.board()["rows"]}, {"Вихрь", "Ершик"})
+        self.store.bury([market.offer_key({"slug": "art", "buyout": 10, "amount": 1})], now=130)
+        self.store.merge_scan(
+            [{"slug": "art", "name": "Вихрь", "buyout": 10, "amount": 1, "gain": 5}],
+            ["art"],
+            "я",
+            now=140,
+        )
+        self.assertEqual([row["name"] for row in self.store.board()["rows"]], ["Ершик"])
+
+    def test_slice_splits_the_catalog(self):
+        items = [{"id": "a", "cat": "artefact"}, {"id": "b", "cat": "misc"}]
+        first = self.store.claim_slice(items, limit=1, who="я", now=10, stale=50)
+        second = self.store.claim_slice(items, limit=1, who="друг", now=20, stale=50)
+        self.assertEqual(first, ["a"])
+        self.assertEqual(second, ["b"])
+        self.assertEqual(self.store.claim_slice(items, limit=1, who="ещё", now=30, stale=50), [])
+
 
 class HubTests(unittest.TestCase):
     def setUp(self):
@@ -104,5 +135,4 @@ class HubTests(unittest.TestCase):
 
         rows = agent.buy_scan(on_update=take, budget=0)
         self.assertEqual(rows[0]["name"], "Вихрь")
-        self.assertEqual(seen["done"], 1)
-        self.assertFalse((self.root / "items.db").exists())
+        self.assertIn("Вихрь", [row["name"] for row in seen["rows"]])

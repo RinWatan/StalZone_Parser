@@ -111,6 +111,9 @@ def rows_from(data):
                     "qty": copies * amount,
                     "qlt": r.get("qlt") or "",
                     "ptn": r.get("ptn") or "",
+                    "slug": r.get("slug") or "",
+                    "lot": int(r.get("buyout") or 0),
+                    "amount": amount,
                 },
             })
         tables["buys"] = buys
@@ -706,6 +709,9 @@ class Bridge:
         except Exception as error:
             self.note(str(error))
             return {"ok": False, "error": str(error), "rows": [], "gain": 0, "today_gain": 0}
+
+    def mark_bought(self, slug, buyout, amount):
+        return agent.mark_shared(slug, buyout, amount)
 
     def ledger_add(self, name, buy, sell, qty=None, qlt="", ptn=""):
         try:
@@ -1469,7 +1475,10 @@ function paintBuys(box, rows, rule) {
       if (!deal) return;
       if (!input.checked) { input.checked = true; return; }
       const res = await pywebview.api.ledger_add(deal.name, deal.buy, deal.sell, deal.qty, deal.qlt || "", deal.ptn || "");
-      if (res && res.ok !== false) state.book = res.rows || [];
+      if (res && res.ok !== false) {
+        state.book = res.rows || [];
+        await pywebview.api.mark_bought(deal.slug || "", deal.lot || 0, deal.amount || 0);
+      }
       if (!res || res.ok === false) input.checked = false;
       else paint("buys");
     };

@@ -624,9 +624,9 @@ def _pull_hub_deals():
     return data
 
 
-def _publish_board(rows, scanned, total):
+def _publish_board(rows, checked, total):
     try:
-        market.open_store(DIR / "market.db").save_board(rows, scanned, total)
+        market.open_store(DIR / "market.db").merge_scan(rows, checked, _who())
     except Exception as exc:
         log(f"снимок хранилища: {exc}")
 
@@ -671,11 +671,18 @@ def refresh_board(store=None):
     with ThreadPoolExecutor(max_workers=AUCTION_WORKERS) as pool:
         for slug, lots in pool.map(one, slugs):
             live[slug] = lots
+    dead = []
     kept = []
     for row in board["rows"]:
         lots = live.get(row.get("slug"))
         if lots is None or _offer_alive(row, lots):
             kept.append(row)
+        else:
+            key = market.offer_key(row)
+            if key:
+                dead.append(key)
+    if dead:
+        store.bury(dead)
     store.save_board(kept, board.get("scanned") or 0, board.get("total") or 0)
     return store.board()
 
@@ -1846,17 +1853,18 @@ def buy_targets(favs=None):
             starred = item["id"] in favs
             if item["id"] in off:
                 continue
+            cat = item.get("cat") or ""
             blocked = (
-                item["cat"] == "weapon_modules"
+                cat == "weapon_modules"
                 or item["name"] in ERROR_NAMES
                 or item["id"] in quiet
-                or _skip_buy(item["cat"], item["name"], item.get("color"))
+                or _skip_buy(cat, item["name"], item.get("color"))
             )
             if blocked and not starred:
                 continue
-            single = starred or item["cat"] in single_cats
+            single = starred or cat in single_cats
             row = (item["id"], item["name"], single, 1, 1)
-            if item["cat"] == "artefact":
+            if cat == "artefact":
                 arts.append(row)
             elif starred:
                 pinned.append(row)
@@ -1904,14 +1912,15 @@ def _buy_one(item):
         if code == 404:
             _remember_off(slug)
             log(f"{name}: на аукционе этого предмета нет")
+            return []
         elif code == 429:
             log(f"{name}: лимит запросов, предмет пропущен")
         else:
             log(f"{name}: ошибка {code}")
-        return []
+        return None
     except Exception as e:
         log(f"{name}: {e}")
-        return []
+        return None
 
 
 def parse_money(text):
@@ -1971,16 +1980,98 @@ def fit_budget(deals, budget):
     return chosen
 
 
-def buy_scan(status=None, budget=0, on_update=None, favs=None):
+def _hub_post(suffix, payload):
+    import urllib.request
+    raw = json.dumps(payload, ensure_ascii=False, default=market._jsonable).encode()
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    token = hub_token()
+    if token:
+        headers["X-Hub-Token"] = token
+    request = urllib.request.Request(hub_url() + suffix, data=raw, headers=headers)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode())
+
+
+def _pull_slice(items):
+    if not hub_url():
+        return []
+    try:
+        data = _hub_post("/v1/slice", {"n": 80, "items": items})
+    except Exception as exc:
+        log(f"хранилище сетки: {exc}")
+        return []
+    slugs = data.get("slugs") if isinstance(data, dict) else None
+    return [str(slug) for slug in slugs or [] if slug]
+
+
+def _push_scan(deals, checked):
+    if not hub_url() or (not deals and not checked):
+        return
+    try:
+        _hub_post("/v1/scan", {"deals": deals, "checked": checked, "who": _who()})
+    except Exception as exc:
+        log(f"хранилище не приняло прогон: {exc}")
+
+
+def mark_shared(slug, buyout, amount):
+    key = market.offer_key({"slug": slug, "buyout": buyout, "amount": amount})
+    if not key:
+        return {"ok": False}
+    try:
+        market.open_store(DIR / "market.db").bury([key])
+    except Exception as exc:
+        log(f"локальная отметка: {exc}")
+    if not hub_url():
+        return {"ok": True}
+    try:
+        _hub_post("/v1/bought", {"slug": slug, "buyout": int(buyout or 0), "amount": int(amount or 0)})
+    except Exception as exc:
+        log(f"хранилище не закрыло лот: {exc}")
+        return {"ok": False, "reason": "Хранилище не ответило, у себя лот уже убран"}
+    return {"ok": True}
+
+
+def _who():
+    import socket
+    return socket.gethostname() or "свой"
+
+
+def _grid_items(slugs, favs):
+    known = {row[0]: row for row in buy_targets(favs)}
+    return [known.get(slug) or (slug, slug, True, 1, 1) for slug in slugs]
+
+
+def _grid_scan(status=None, budget=0, on_update=None, favs=None):
     remote = _pull_hub_deals()
-    if remote is not None:
-        age = max(0, int(time.time() - float(remote.get("ts") or 0)))
+    shown = fit_budget((remote or {}).get("rows") or [], budget)
+    if remote and on_update:
+        on_update(shown, int(remote.get("scanned") or 0), int(remote.get("total") or 0))
+    if status:
+        status("Сетка: показываю общие находки и беру свою часть каталога")
+    listing = []
+    try:
+        listing = [{"id": item["id"], "cat": item.get("cat") or ""} for item in auction_listing()]
+    except Exception as exc:
+        log(f"каталог для сетки: {exc}")
+    slugs = _pull_slice(listing)
+    if not slugs or HALT.is_set():
         if status:
-            status(f"Общее хранилище, снимок {age // 60} мин {age % 60} с назад")
-        shown = fit_budget(remote.get("rows") or [], budget)
-        if on_update:
-            on_update(shown, int(remote.get("scanned") or 0), int(remote.get("total") or 0))
+            status("Сетка свежая" if not slugs else "Сетка остановлена")
         return shown
+    deals, done, total, failed = _scan_items(_grid_items(slugs, favs), budget, status, on_update, "Сетка")
+    _push_scan(deals, [slug for slug in slugs if slug not in failed])
+    remote = _pull_hub_deals()
+    if remote and remote.get("rows"):
+        merged = fit_budget(remote["rows"], budget)
+        if on_update:
+            on_update(merged, int(remote.get("scanned") or done), int(remote.get("total") or total))
+        return merged
+    return fit_budget(deals, budget)
+
+
+def buy_scan(status=None, budget=0, on_update=None, favs=None):
+    if hub_url():
+        return _grid_scan(status, budget, on_update, favs)
     global _GAP
     _GAP = 0.10
     if status:
@@ -1989,19 +2080,36 @@ def buy_scan(status=None, budget=0, on_update=None, favs=None):
     total = len(items)
     if status:
         status(f"Выкуп по всему аукциону: {total} предметов. Таблица будет заполняться по ходу")
-    deals = []
-    done = 0
     if not items or HALT.is_set():
         return []
+    deals, done, _total, failed = _scan_items(items, budget, status, on_update, "Выкуп")
+    _publish_board(deals, [item[0] for item in items if item[0] not in failed], total)
+    return fit_budget(deals, budget)
+
+
+def _scan_items(items, budget, status, on_update, label):
+    global _GAP
+    _GAP = 0.10
+    deals = []
+    done = 0
+    failed = set()
+    total = len(items)
+    if not items or HALT.is_set():
+        return deals, done, total, failed
     with ThreadPoolExecutor(max_workers=AUCTION_WORKERS) as pool:
         remaining = iter(items)
         pending = set()
+        slugs = {}
+
         def fill():
             while len(pending) < AUCTION_WORKERS and not HALT.is_set():
                 item = next(remaining, None)
                 if item is None:
                     break
-                pending.add(pool.submit(_buy_one, item))
+                fut = pool.submit(_buy_one, item)
+                slugs[fut] = item[0]
+                pending.add(fut)
+
         fill()
         try:
             while pending and not HALT.is_set():
@@ -2010,10 +2118,14 @@ def buy_scan(status=None, budget=0, on_update=None, favs=None):
                     if HALT.is_set():
                         break
                     done += 1
+                    slug = slugs.pop(fut, "")
                     try:
                         part = fut.result()
                     except Exception:
-                        part = []
+                        part = None
+                    if part is None:
+                        failed.add(slug)
+                        continue
                     changed = False
                     if isinstance(part, list) and part:
                         deals.extend(_as_buys(part))
@@ -2021,7 +2133,7 @@ def buy_scan(status=None, budget=0, on_update=None, favs=None):
                     if changed or done % 15 == 0 or done == total:
                         shown = fit_budget(deals, budget)
                         if status:
-                            status(f"Выкуп {done}/{total}, в бюджете {len(shown)}")
+                            status(f"{label} {done}/{total}, в бюджете {len(shown)}")
                         if on_update and (changed or done == total):
                             on_update(shown, done, total)
                 fill()
@@ -2029,8 +2141,7 @@ def buy_scan(status=None, budget=0, on_update=None, favs=None):
             for fut in pending:
                 fut.cancel()
             flush_sells()
-    _publish_board(deals, done, total)
-    return fit_budget(deals, budget)
+    return deals, done, total, failed
 
 
 def _flip_arts(item):
