@@ -27,3 +27,12 @@ screen_slots.json
 pda_cache/
 map_dir.txt
 pda_root.txt
+market.db
+market.db-wal
+market.db-shm
+hub.json
+hub.url
+license_server.json
+license_server.db
+license_server.url
+

@@ -878,10 +878,10 @@ class Bridge:
             stats = None
             summary = "Статистика недоступна: не удалось загрузить историю"
         best = min((r for r in lots if r.get("buyout")), key=lambda r: r["unit"] or r["buyout"], default=None)
-        mean = int(stats["mean"]) if stats and stats.get("count") else 0
+        median = int(stats["median"]) if stats and stats.get("count") else 0
         delta = ""
-        if best and mean and best.get("unit"):
-            delta = f"{round((best['unit'] - mean) / mean * 100):+d}% от средней"
+        if best and median and best.get("unit"):
+            delta = f"{round((best['unit'] - median) / median * 100):+d}% от медианы"
         card = {
             "price": int(best["buyout"]) if best else 0,
             "unit": int(best["unit"]) if best else 0,
@@ -891,8 +891,8 @@ class Bridge:
             "ptn": f"+{best['ptn']}" if best and best["qlt"] is not None else "",
             "amount": int(best["amount"]) if best else 0,
             "count": int(stats["count"]) if stats else 0,
-            "mean": mean,
-            "mean_text": money(mean) if mean else "—",
+            "mean": median,
+            "mean_text": money(median) if median else "—",
             "delta": delta,
             "verdict": data.get("verdict") or "",
         }
@@ -2372,7 +2372,7 @@ function paintCard(name, row) {
     delta.classList.toggle("up", String(card.delta || "").trim().startsWith("+"));
   }
   if ($("lot-facts")) {
-    const cells = [["Качество", card.qname || "—"], ["Осталось", card.left || "—"], ["Средняя цена", card.mean ? card.mean_text + " ₽" : "—"], ["Продаж за 7 д", String(card.count || 0)]];
+    const cells = [["Качество", card.qname || "—"], ["Осталось", card.left || "—"], ["Медиана 7 д", card.mean ? card.mean_text + " ₽" : "—"], ["Продаж за 7 д", String(card.count || 0)]];
     $("lot-facts").innerHTML = cells.map(([k, v]) => `<div><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join("");
   }
   if ($("auc-price")) $("auc-price").textContent = card.price ? card.text : "—";

@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import threading
@@ -16,6 +17,7 @@ from pathlib import Path
 import httpx
 
 import stalzone_db
+import stalzone_market as market
 
 
 def app_dir():
@@ -39,7 +41,7 @@ UA = "stalzone-agent/1.0"
 MSK = timezone(timedelta(hours=3))
 HALT = threading.Event()
 WORKERS = 4
-AUCTION_WORKERS = 8
+AUCTION_WORKERS = 16
 _LOG_LOCK = threading.Lock()
 BUDGET = 5_000_000
 
@@ -371,7 +373,7 @@ def _client():
             _CLIENT = httpx.Client(
                 timeout=httpx.Timeout(12.0, connect=8.0),
                 follow_redirects=True,
-                limits=httpx.Limits(max_connections=8, max_keepalive_connections=8),
+                limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
             )
         return _CLIENT
 
@@ -550,9 +552,83 @@ _OFF_LOCK = threading.Lock()
 _QUIET = None
 _QUIET_LOCK = threading.Lock()
 QUIET_FOR = 30 * 60
+_QUIET_DIRTY = False
+_QUIET_FLUSH_AT = 0.0
 _SELL = None
 _SELL_LOCK = threading.Lock()
 SELL_FOR = 20 * 60
+
+
+def hub_url():
+    env = os.environ.get("STALZONE_HUB", "").strip()
+    if env:
+        return env.rstrip("/")
+    path = DIR / "hub.url"
+    if not path.exists():
+        return ""
+    lines = [line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
+    return lines[0].rstrip("/") if lines else ""
+
+
+def hub_token():
+    env = os.environ.get("STALZONE_HUB_TOKEN", "").strip()
+    if env:
+        return env
+    path = DIR / "hub.url"
+    if not path.exists():
+        return ""
+    lines = [line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
+    return lines[1] if len(lines) > 1 else ""
+
+
+def _hub_get(suffix):
+    import urllib.request
+    headers = {"Accept": "application/json"}
+    token = hub_token()
+    if token:
+        headers["X-Hub-Token"] = token
+    request = urllib.request.Request(hub_url() + suffix, headers=headers)
+    with urllib.request.urlopen(request, timeout=8) as response:
+        return json.loads(response.read().decode())
+
+
+def _pull_hub_catalog(status=None):
+    if not hub_url():
+        return None
+    path = DIR / "catalog.json"
+    if path.exists() and time.time() - path.stat().st_mtime < 6 * 3600:
+        return None
+    try:
+        data = _hub_get("/v1/catalog")
+    except Exception as exc:
+        log(f"хранилище каталога: {exc}")
+        return None
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list) or not items:
+        return None
+    path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    _tell(status, f"Каталог взят из хранилища, {len(items)} предметов")
+    return items
+
+
+def _pull_hub_deals():
+    if not hub_url():
+        return None
+    try:
+        data = _hub_get("/v1/deals")
+    except Exception as exc:
+        log(f"хранилище снимка: {exc}")
+        return None
+    if not isinstance(data, dict) or not data.get("rows") or not data.get("ts"):
+        return None
+    return data
+
+
+def _publish_board(rows, scanned, total):
+    try:
+        market.open_store(DIR / "market.db").save_board(rows, scanned, total)
+    except Exception as exc:
+        log(f"снимок хранилища: {exc}")
 
 
 def auction_listing(force=False, status=None):
@@ -577,6 +653,10 @@ def _tell(status, msg):
 
 def _load_catalog(force=False, status=None):
     path = DIR / "catalog.json"
+    pulled = None if force else _pull_hub_catalog(status)
+    if pulled:
+        _sync_items(pulled)
+        return _auction_rows(pulled)
     fresh = path.exists() and time.time() - path.stat().st_mtime < 3 * 86400
     if fresh and not force:
         items = json.loads(path.read_text(encoding="utf-8"))
@@ -846,10 +926,23 @@ def quiet_lots():
 
 
 def _remember_quiet(slug):
+    global _QUIET_DIRTY
     book = _quiet_map()
     with _QUIET_LOCK:
         book[slug] = time.time()
-        now = time.time()
+        _QUIET_DIRTY = True
+    _flush_quiet(False)
+
+
+def _flush_quiet(force=False):
+    global _QUIET_DIRTY, _QUIET_FLUSH_AT
+    now = time.time()
+    if not force and (not _QUIET_DIRTY or now < _QUIET_FLUSH_AT):
+        return
+    book = _quiet_map()
+    with _QUIET_LOCK:
+        if not force and not _QUIET_DIRTY:
+            return
         fresh = {key: ts for key, ts in book.items() if now - ts < QUIET_FOR}
         book.clear()
         book.update(fresh)
@@ -857,6 +950,8 @@ def _remember_quiet(slug):
             (DIR / "quiet_lots.json").write_text(json.dumps(book), encoding="utf-8")
         except OSError:
             pass
+        _QUIET_DIRTY = False
+        _QUIET_FLUSH_AT = now + 2
 
 
 def _sell_map():
@@ -879,9 +974,22 @@ def _sell_id(slug, key, amount):
     return f"{slug}|{amount}|{key}"
 
 
+def _stored_sell(sid, now):
+    book = _sell_map()
+    with _SELL_LOCK:
+        hit = book.get(sid) or {}
+    sell = hit.get("sell")
+    ts = hit.get("ts") or 0
+    if sell and now - ts <= SELL_FOR:
+        return float(sell)
+    try:
+        return market.open_store(DIR / "market.db").sell(sid, now)
+    except Exception:
+        return None
+
+
 def _still_dear(slug, lots):
     """Историю не качаем, если даже прошлая обычная цена не даёт запаса."""
-    book = _sell_map()
     now = time.time()
     groups = {}
     for lot in lots:
@@ -892,13 +1000,10 @@ def _still_dear(slug, lots):
         groups.setdefault(_sell_id(slug, side_key(lot.get("additional")), amt), []).append(buy / amt)
     if not groups:
         return False
-    with _SELL_LOCK:
-        for sid, units in groups.items():
-            hit = book.get(sid) or {}
-            sell = hit.get("sell")
-            ts = hit.get("ts") or 0
-            if not sell or now - ts > SELL_FOR or min(units) <= sell * 0.92:
-                return False
+    for sid, units in groups.items():
+        sell = _stored_sell(sid, now)
+        if not sell or min(units) <= sell * 0.92:
+            return False
     return True
 
 
@@ -930,6 +1035,13 @@ def flush_sells():
             (DIR / "sell_cache.json").write_text(json.dumps(book), encoding="utf-8")
         except OSError:
             pass
+        try:
+            market.open_store(DIR / "market.db").put_sells(
+                [(sid, row.get("sell"), row.get("ts")) for sid, row in book.items()]
+            )
+        except Exception:
+            pass
+    _flush_quiet(True)
 
 
 def _qname(qlt):
@@ -1796,6 +1908,15 @@ def fit_budget(deals, budget):
 
 
 def buy_scan(status=None, budget=0, on_update=None, favs=None):
+    remote = _pull_hub_deals()
+    if remote is not None:
+        age = max(0, int(time.time() - float(remote.get("ts") or 0)))
+        if status:
+            status(f"Общее хранилище, снимок {age // 60} мин {age % 60} с назад")
+        shown = fit_budget(remote.get("rows") or [], budget)
+        if on_update:
+            on_update(shown, int(remote.get("scanned") or 0), int(remote.get("total") or 0))
+        return shown
     global _GAP
     _GAP = 0.10
     if status:
@@ -1844,6 +1965,7 @@ def buy_scan(status=None, budget=0, on_update=None, favs=None):
             for fut in pending:
                 fut.cancel()
             flush_sells()
+    _publish_board(deals, done, total)
     return fit_budget(deals, budget)
 
 
